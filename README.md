@@ -164,7 +164,7 @@ A ideia é manter o SQLite como fonte principal dos dados e enviar as alteraçõ
 
 Projeto Casa Vida, desenvolvido por estudantes de Sistemas de Informação, Engenharia de Software, Marketing e Administração:
 
-Arthur José Barbosa Medeiros, Bernardo Vizeu de Miranda, Ícaro de Alencar Araripe Andrade, Luiz Gouvêa, Arthur Falcetti, Enzo Dutra, João Vitor Faião, Gustavo Gavioli, Samuel Guimarães e Davi Grossi.
+Arthur José Barbosa Medeiros, Bernardo Vizeu de Miranda, Ícaro de Alencar Araripe Andrade, Luiz Gouvêa, Enzo Dutra, João Vitor Faião, Gustavo Gavioli, Samuel Guimarães, Davi Grossi, Matheus Steiner Miletto e Pedro Lucas Ventura Meyer Goulart
 
 ## Licença
 
