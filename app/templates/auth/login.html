@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Entrar - Sistema Casa Vida</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/estilo.css') }}">
+    <link rel="icon" href="{{ url_for('static', filename='img/favicon.ico') }}" sizes="any">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='img/favicon-32x32.png') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='img/favicon-16x16.png') }}">
+    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='img/apple-touch-icon.png') }}">
+    <link rel="manifest" href="{{ url_for('static', filename='img/site.webmanifest') }}">
+    <meta name="theme-color" content="#1e3a5f">
+</head>
+<body class="login-corpo">
+    <div class="login-card">
+        <div class="login-topo">
+            <div class="navbar-logo-icone" style="width: 54px; height: 54px; margin: 0 auto; font-size: 1.5rem;">CV</div>
+            <h1>Instituto Casa Vida</h1>
+            <p>Apoio a Pacientes Oncológicos e Familiares</p>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                <div class="alerta alerta-{{ category }}">
+                    <span>{{ message }}</span>
+                    <button type="button" class="alerta-fechar" aria-label="Fechar">&times;</button>
+                </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <form method="post" autocomplete="off">
+            <div class="form-grupo" style="margin-bottom: 1.1rem;">
+                <label for="username" class="form-label">Usuário</label>
+                <input type="text" id="username" name="username" class="form-controle" required autofocus placeholder="Digite seu usuário">
+            </div>
+
+            <div class="form-grupo" style="margin-bottom: 1.5rem;">
+                <label for="senha" class="form-label">Senha</label>
+                <input type="password" id="senha" name="senha" class="form-controle" required placeholder="Digite sua senha">
+            </div>
+
+            <button type="submit" class="btn btn-primario btn-lg" style="width: 100%;">
+                Entrar no Sistema
+            </button>
+        </form>
+
+        <div style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--cor-borda); font-size: 0.8rem; color: var(--cor-texto-mutado); text-align: center;">
+            <p><strong>Acesso Inicial:</strong> <code>admin</code> / <code>admin123</code></p>
+            <p style="margin-top: 0.35rem;">Uso restrito da equipe e voluntários autorizados.</p>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

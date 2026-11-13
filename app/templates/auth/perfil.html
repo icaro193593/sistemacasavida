@@ -1,0 +1,60 @@
+{% extends 'base.html' %}
+
+{% block title %}Meu Perfil{% endblock %}
+
+{% block content %}
+<div style="max-width: 600px; margin: 0 auto;">
+    <div class="card">
+        <div class="card-cabecalho">
+            <h2 class="card-titulo">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                Meu Perfil e Segurança
+            </h2>
+        </div>
+        <div class="card-corpo">
+            <form method="post">
+                <div class="form-grupo" style="margin-bottom: 1rem;">
+                    <label class="form-label">Nome de Usuário (Login)</label>
+                    <input type="text" class="form-controle" value="{{ g.user.username }}" disabled>
+                    <span class="form-ajuda">O nome de usuário não pode ser alterado.</span>
+                </div>
+
+                <div class="form-grupo" style="margin-bottom: 1rem;">
+                    <label class="form-label">Perfil de Acesso</label>
+                    <input type="text" class="form-controle" value="{{ g.user.perfil }}" disabled style="text-transform: capitalize;">
+                </div>
+
+                <div class="form-grupo" style="margin-bottom: 1.5rem;">
+                    <label for="nome_completo" class="form-label">Nome Completo <span class="obrigatorio">*</span></label>
+                    <input type="text" id="nome_completo" name="nome_completo" class="form-controle" value="{{ g.user.nome_completo }}" required>
+                </div>
+
+                <div class="form-secao" style="font-size: 1rem;">Alterar Senha de Acesso</div>
+                <p style="font-size: 0.85rem; color: var(--cor-texto-mutado); margin-bottom: 1rem;">
+                    Deixe os campos de senha em branco se desejar manter sua senha atual.
+                </p>
+
+                <div class="form-grupo" style="margin-bottom: 1rem;">
+                    <label for="senha_atual" class="form-label">Senha Atual</label>
+                    <input type="password" id="senha_atual" name="senha_atual" class="form-controle" placeholder="Necessária apenas se for alterar a senha">
+                </div>
+
+                <div class="form-grupo" style="margin-bottom: 1rem;">
+                    <label for="nova_senha" class="form-label">Nova Senha</label>
+                    <input type="password" id="nova_senha" name="nova_senha" class="form-controle" placeholder="Mínimo de 6 caracteres">
+                </div>
+
+                <div class="form-grupo" style="margin-bottom: 1.5rem;">
+                    <label for="confirmar_senha" class="form-label">Confirmar Nova Senha</label>
+                    <input type="password" id="confirmar_senha" name="confirmar_senha" class="form-controle" placeholder="Repita a nova senha">
+                </div>
+
+                <div style="display: flex; gap: 0.75rem;">
+                    <button type="submit" class="btn btn-primario">Salvar Alterações</button>
+                    <a href="{{ url_for('pacientes.index') }}" class="btn btn-outline">Cancelar</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

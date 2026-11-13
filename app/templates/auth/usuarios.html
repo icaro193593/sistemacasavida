@@ -1,0 +1,111 @@
+{% extends 'base.html' %}
+
+{% block title %}Gestão de Usuários{% endblock %}
+
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+    <div>
+        <h1 style="font-size: 1.6rem; color: var(--cor-primaria); font-weight: 700;">Gestão de Usuários</h1>
+        <p style="color: var(--cor-texto-mutado); font-size: 0.9rem;">Controle de acesso dos operadores e voluntários da instituição.</p>
+    </div>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 340px; gap: 1.5rem; align-items: start;">
+    <div class="card">
+        <div class="card-cabecalho">
+            <h2 class="card-titulo">Usuários Cadastrados</h2>
+        </div>
+        <div class="tabela-container">
+            <table class="tabela">
+                <thead>
+                    <tr>
+                        <th>Nome Completo</th>
+                        <th>Usuário</th>
+                        <th>Perfil</th>
+                        <th>Status</th>
+                        <th>Último Acesso</th>
+                        <th style="text-align: right;">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for u in usuarios %}
+                    <tr>
+                        <td><strong>{{ u.nome_completo }}</strong></td>
+                        <td><code>{{ u.username }}</code></td>
+                        <td>
+                            <span class="badge {% if u.perfil == 'admin' %}badge-azul{% else %}badge-ativo{% endif %}">
+                                {{ u.perfil }}
+                            </span>
+                        </td>
+                        <td>
+                            {% if u.ativo %}
+                            <span class="badge badge-ativo">Ativo</span>
+                            {% else %}
+                            <span class="badge badge-desligado">Inativo</span>
+                            {% endif %}
+                        </td>
+                        <td style="font-size: 0.8rem; color: var(--cor-texto-mutado);">
+                            {{ u.ultimo_login|formata_data if u.ultimo_login else 'Nunca acessou' }}
+                        </td>
+                        <td style="text-align: right;">
+                            {% if u.id != g.user.id %}
+                            <form method="post" action="{{ url_for('auth.alternar_status_usuario', id=u.id) }}" style="display: inline;">
+                                {% if u.ativo %}
+                                <button type="submit" class="btn btn-sm btn-outline" style="color: var(--cor-perigo);" title="Desativar Acesso">
+                                    Desativar
+                                </button>
+                                {% else %}
+                                <button type="submit" class="btn btn-sm btn-outline" style="color: var(--cor-sucesso);" title="Reativar Acesso">
+                                    Reativar
+                                </button>
+                                {% endif %}
+                            </form>
+                            {% else %}
+                            <span style="font-size: 0.8rem; color: var(--cor-texto-mutado);">(Seu usuário)</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-cabecalho">
+            <h2 class="card-titulo">Cadastrar Novo Usuário</h2>
+        </div>
+        <div class="card-corpo">
+            <form method="post" action="{{ url_for('auth.criar_usuario') }}">
+                <div class="form-grupo" style="margin-bottom: 0.9rem;">
+                    <label for="nome_completo" class="form-label">Nome Completo <span class="obrigatorio">*</span></label>
+                    <input type="text" id="nome_completo" name="nome_completo" class="form-controle" required placeholder="Ex: Maria Silva">
+                </div>
+
+                <div class="form-grupo" style="margin-bottom: 0.9rem;">
+                    <label for="username" class="form-label">Login (Usuário) <span class="obrigatorio">*</span></label>
+                    <input type="text" id="username" name="username" class="form-controle" required placeholder="Ex: mariasilva">
+                </div>
+
+                <div class="form-grupo" style="margin-bottom: 0.9rem;">
+                    <label for="senha" class="form-label">Senha Inicial <span class="obrigatorio">*</span></label>
+                    <input type="password" id="senha" name="senha" class="form-controle" required placeholder="Mínimo 6 caracteres">
+                </div>
+
+                <div class="form-grupo" style="margin-bottom: 1.25rem;">
+                    <label for="perfil" class="form-label">Nível de Acesso <span class="obrigatorio">*</span></label>
+                    <select id="perfil" name="perfil" class="form-controle">
+                        <option value="atendente">Atendente / Recepção</option>
+                        <option value="assistente_social">Assistente Social</option>
+                        <option value="admin">Administrador do Sistema</option>
+                    </select>
+                </div>
+
+                <button type="submit" class="btn btn-primario" style="width: 100%;">
+                    Cadastrar Usuário
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,101 @@
+{% extends 'base.html' %}
+
+{% block title %}Backups do Banco de Dados{% endblock %}
+
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.75rem;">
+    <div>
+        <h1 style="font-size: 1.6rem; color: var(--cor-primaria); font-weight: 700;">Backups e Segurança dos Dados</h1>
+        <p style="color: var(--cor-texto-mutado); font-size: 0.9rem;">Gerenciamento de cópias de segurança do banco de dados SQLite local.</p>
+    </div>
+    <form method="post" action="{{ url_for('backup.criar') }}">
+        <button type="submit" class="btn btn-sucesso">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+            Criar Backup Agora
+        </button>
+    </form>
+</div>
+
+<div class="grid-stats">
+    <div class="card-stat">
+        <div class="card-stat-icone" style="background-color: var(--cor-primaria-light); color: var(--cor-primaria);">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+        </div>
+        <div>
+            <div class="card-stat-valor">{{ tamanho_atual }}</div>
+            <div class="card-stat-rotulo">Tamanho do Banco Atual</div>
+        </div>
+    </div>
+
+    <div class="card-stat">
+        <div class="card-stat-icone" style="background-color: var(--cor-info-bg); color: var(--cor-info);">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+        </div>
+        <div>
+            <div class="card-stat-valor">{{ backups|length }}</div>
+            <div class="card-stat-rotulo">Cópias de Backup Disponíveis</div>
+        </div>
+    </div>
+</div>
+
+<div class="alerta alerta-warning" style="margin-bottom: 1.5rem;">
+    <div>
+        <strong>Recomendação de Segurança para a Instituição:</strong>
+        Como o sistema opera localmente em hardware modesto, recomendamos copiar periodicamente a pasta <code>backups/</code> ou fazer o download dos arquivos <code>.db</code> para um <strong>pen-drive ou HD externo</strong> semanalmente.
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-cabecalho">
+        <h2 class="card-titulo">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+            Histórico de Arquivos de Backup
+        </h2>
+    </div>
+    <div class="tabela-container">
+        <table class="tabela">
+            <thead>
+                <tr>
+                    <th>Nome do Arquivo</th>
+                    <th>Data e Hora do Backup</th>
+                    <th>Tamanho</th>
+                    <th style="text-align: right;">Ações</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if backups %}
+                    {% for b in backups %}
+                    <tr>
+                        <td>
+                            <code style="font-weight: 600; color: var(--cor-primaria);">{{ b.nome }}</code>
+                        </td>
+                        <td>{{ b.data_modificacao }}</td>
+                        <td>{{ b.tamanho }}</td>
+                        <td style="text-align: right; white-space: nowrap;">
+                            <a href="{{ url_for('backup.download', nome_arquivo=b.nome) }}" class="btn btn-sm btn-outline" title="Baixar arquivo para pen-drive">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                Baixar
+                            </a>
+
+                            {% if g.user.perfil == 'admin' %}
+                            <form method="post" action="{{ url_for('backup.restaurar', nome_arquivo=b.nome) }}" class="confirmar-acao" data-confirmacao="ATENÇÃO: Restaurar este backup substituirá os dados atuais do banco pelo ponto selecionado. Uma cópia de segurança prévia será gerada automaticamente. Deseja prosseguir?" style="display: inline;">
+                                <button type="submit" class="btn btn-sm btn-outline" style="color: var(--cor-perigo); border-color: #fecaca;" title="Restaurar Banco de Dados">
+                                    Restaurar
+                                </button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="4" style="text-align: center; padding: 2rem; color: var(--cor-texto-mutado);">
+                            Nenhum backup encontrado. Clique no botão "Criar Backup Agora" acima para gerar sua primeira cópia.
+                        </td>
+                    </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

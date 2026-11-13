@@ -1,0 +1,185 @@
+{% extends 'base.html' %}
+
+{% block title %}Assistidos{% endblock %}
+
+{% block content %}
+<div class="grid-stats">
+    <div class="card-stat">
+        <div class="card-stat-icone" style="background-color: var(--cor-primaria-light); color: var(--cor-primaria);">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+        </div>
+        <div>
+            <div class="card-stat-valor">{{ stats.total }}</div>
+            <div class="card-stat-rotulo">Total de Assistidos</div>
+        </div>
+    </div>
+
+    <div class="card-stat">
+        <div class="card-stat-icone" style="background-color: var(--cor-sucesso-bg); color: var(--cor-sucesso);">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+        </div>
+        <div>
+            <div class="card-stat-valor">{{ stats.ativos }}</div>
+            <div class="card-stat-rotulo">Assistidos Ativos</div>
+        </div>
+    </div>
+
+    <div class="card-stat">
+        <div class="card-stat-icone" style="background-color: var(--cor-aviso-bg); color: var(--cor-aviso);">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 14 14"></polyline></svg>
+        </div>
+        <div>
+            <div class="card-stat-valor">{{ stats.espera }}</div>
+            <div class="card-stat-rotulo">Fila de Espera</div>
+        </div>
+    </div>
+
+    <div class="card-stat">
+        <div class="card-stat-icone" style="background-color: var(--cor-info-bg); color: var(--cor-info);">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+        </div>
+        <div>
+            <div class="card-stat-valor">{{ stats.atendimentos_mes }}</div>
+            <div class="card-stat-rotulo">Atendimentos no Mês</div>
+        </div>
+    </div>
+</div>
+
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem;">
+    <div>
+        <h1 style="font-size: 1.5rem; color: var(--cor-primaria); font-weight: 700;">Assistidos e Prontuários</h1>
+        <p style="font-size: 0.85rem; color: var(--cor-texto-mutado);">{{ total_registros }} registro(s) encontrado(s)</p>
+    </div>
+    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+        <a href="{{ url_for('pacientes.novo') }}" class="btn btn-primario">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            Novo Paciente
+        </a>
+        <a href="{{ url_for('pacientes.exportar_csv') }}" class="btn btn-outline" title="Exportar dados para Excel/CSV">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            Exportar CSV
+        </a>
+    </div>
+</div>
+
+<form method="get" class="barra-filtros">
+    <div class="busca-input-grupo">
+        <svg class="busca-icone" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+        <input type="text" name="busca" class="busca-input" placeholder="Buscar por nome, prontuário, CPF ou tipo de câncer..." value="{{ termo }}">
+    </div>
+
+    <select name="status" class="filtro-select" onchange="this.form.submit()">
+        <option value="">Status: Todos</option>
+        <option value="Ativo" {% if status_filtro == 'Ativo' %}selected{% endif %}>Ativo</option>
+        <option value="Em Espera" {% if status_filtro == 'Em Espera' %}selected{% endif %}>Em Espera</option>
+        <option value="Desligado" {% if status_filtro == 'Desligado' %}selected{% endif %}>Desligado</option>
+        <option value="Óbito" {% if status_filtro == 'Óbito' %}selected{% endif %}>Óbito</option>
+    </select>
+
+    <button type="submit" class="btn btn-secundario">Filtrar</button>
+    {% if termo or status_filtro or diagnostico_filtro %}
+    <a href="{{ url_for('pacientes.index') }}" class="btn btn-outline">Limpar Filtros</a>
+    {% endif %}
+</form>
+
+<div class="card">
+    <div class="tabela-container">
+        <table class="tabela">
+            <thead>
+                <tr>
+                    <th>Prontuário</th>
+                    <th>Nome do Assistido</th>
+                    <th>CPF</th>
+                    <th>Diagnóstico Oncológico</th>
+                    <th>Telefone / Contato</th>
+                    <th>Bairro / Cidade</th>
+                    <th>Status</th>
+                    <th style="text-align: right;">Ações</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if pacientes %}
+                    {% for p in pacientes %}
+                    <tr>
+                        <td>
+                            <code style="font-weight: 600; color: var(--cor-primaria);">{{ p.prontuario_num or ('# ' ~ p.id) }}</code>
+                        </td>
+                        <td>
+                            <a href="{{ url_for('pacientes.detalhes', id=p.id) }}" style="font-weight: 600; color: var(--cor-texto); text-decoration: none;">
+                                {{ p.nome }}
+                            </a>
+                        </td>
+                        <td style="font-size: 0.85rem; color: var(--cor-texto-mutado);">
+                            {{ p.cpf|formata_cpf }}
+                        </td>
+                        <td>
+                            {% if p.diagnostico %}
+                            <span style="font-size: 0.88rem;">{{ p.diagnostico }}</span>
+                            {% else %}
+                            <span style="color: var(--cor-texto-mutado);">-</span>
+                            {% endif %}
+                        </td>
+                        <td style="font-size: 0.88rem;">
+                            {{ p.telefone|formata_telefone or p.whatsapp|formata_telefone }}
+                        </td>
+                        <td style="font-size: 0.85rem; color: var(--cor-texto-mutado);">
+                            {{ p.endereco_bairro or '-' }} / {{ p.endereco_cidade or 'JF' }}
+                        </td>
+                        <td>
+                            {% if p.status_instituto == 'Ativo' %}
+                            <span class="badge badge-ativo">Ativo</span>
+                            {% elif p.status_instituto == 'Em Espera' %}
+                            <span class="badge badge-espera">Em Espera</span>
+                            {% elif p.status_instituto == 'Óbito' %}
+                            <span class="badge badge-obito">Óbito</span>
+                            {% else %}
+                            <span class="badge badge-desligado">{{ p.status_instituto or 'Desligado' }}</span>
+                            {% endif %}
+                        </td>
+                        <td style="text-align: right; white-space: nowrap;">
+                            <a href="{{ url_for('pacientes.detalhes', id=p.id) }}" class="btn btn-sm btn-outline" title="Ver Prontuário">
+                                Prontuário
+                            </a>
+                            <a href="{{ url_for('pacientes.editar', id=p.id) }}" class="btn btn-sm btn-outline" title="Editar Cadastro">
+                                Editar
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="8" style="text-align: center; padding: 2.5rem; color: var(--cor-texto-mutado);">
+                            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin-bottom: 0.5rem; opacity: 0.5;"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                            <p style="font-weight: 500;">Nenhum assistido encontrado com os filtros informados.</p>
+                            <a href="{{ url_for('pacientes.novo') }}" class="btn btn-primario btn-sm" style="margin-top: 0.75rem;">Cadastrar Novo Assistido</a>
+                        </td>
+                    </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% if total_paginas > 1 %}
+<div class="paginacao">
+    <div>Página {{ pagina }} de {{ total_paginas }}</div>
+    <div class="paginacao-links">
+        {% if pagina > 1 %}
+        <a href="{{ url_for('pacientes.index', pagina=pagina-1, busca=termo, status=status_filtro) }}" class="paginacao-btn">&laquo; Anterior</a>
+        {% endif %}
+
+        {% for p_num in range(1, total_paginas + 1) %}
+            {% if p_num == pagina %}
+            <span class="paginacao-btn ativo">{{ p_num }}</span>
+            {% elif p_num <= 3 or p_num >= total_paginas - 2 or (p_num >= pagina - 1 and p_num <= pagina + 1) %}
+            <a href="{{ url_for('pacientes.index', pagina=p_num, busca=termo, status=status_filtro) }}" class="paginacao-btn">{{ p_num }}</a>
+            {% endif %}
+        {% endfor %}
+
+        {% if pagina < total_paginas %}
+        <a href="{{ url_for('pacientes.index', pagina=pagina+1, busca=termo, status=status_filtro) }}" class="paginacao-btn">Próxima &raquo;</a>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+{% endblock %}
