@@ -35,7 +35,7 @@
         </nav>
     </header>
 
-    <main class="container">
+    <div class="toast-container" id="toast-container" role="status" aria-live="polite">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
@@ -46,12 +46,14 @@
                 {% endfor %}
             {% endif %}
         {% endwith %}
+    </div>
 
+    <main class="container">
         {% block content %}{% endblock %}
     </main>
 
     <footer class="rodape">
-        <p>&copy; {{ ano_atual }} {{ instituicao_nome }} &bull; Juiz de Fora (MG) &bull; Projeto de Extensão Universitária &bull; {{ app_nome }}</p>
+        <p>&copy; {{ ano_atual }} {{ instituicao_nome }} &bull; Juiz de Fora (MG) &bull; {{ app_nome }}</p>
     </footer>
 
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>

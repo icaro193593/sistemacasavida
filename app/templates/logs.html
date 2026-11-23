@@ -21,12 +21,10 @@
     <select name="acao" class="filtro-select" aria-label="Filtrar por tipo de ação">
         <option value="" {% if not acao_filtro %}selected{% endif %}>Todas as ações</option>
         <option value="CADASTRO" {% if acao_filtro == 'CADASTRO' %}selected{% endif %}>{{ acoes_labels.get('CADASTRO', 'CADASTRO') }}</option>
-        <option value="EDICAO_PLANILHA" {% if acao_filtro == 'EDICAO_PLANILHA' %}selected{% endif %}>{{ acoes_labels.get('EDICAO_PLANILHA', 'EDICAO_PLANILHA') }}</option>
         <option value="EDICAO" {% if acao_filtro == 'EDICAO' %}selected{% endif %}>{{ acoes_labels.get('EDICAO', 'EDICAO') }}</option>
         <option value="EXCLUSAO" {% if acao_filtro == 'EXCLUSAO' %}selected{% endif %}>{{ acoes_labels.get('EXCLUSAO', 'EXCLUSAO') }}</option>
         <option value="SINCRONIZACAO_SHEETS" {% if acao_filtro == 'SINCRONIZACAO_SHEETS' %}selected{% endif %}>{{ acoes_labels.get('SINCRONIZACAO_SHEETS', 'SINCRONIZACAO_SHEETS') }}</option>
         <option value="IMPORTACAO" {% if acao_filtro == 'IMPORTACAO' %}selected{% endif %}>{{ acoes_labels.get('IMPORTACAO', 'IMPORTACAO') }}</option>
-        <option value="ATENDIMENTO" {% if acao_filtro == 'ATENDIMENTO' %}selected{% endif %}>{{ acoes_labels.get('ATENDIMENTO', 'ATENDIMENTO') }}</option>
         <option value="EXPORTACAO" {% if acao_filtro == 'EXPORTACAO' %}selected{% endif %}>{{ acoes_labels.get('EXPORTACAO', 'EXPORTACAO') }}</option>
         <option value="BACKUP" {% if acao_filtro == 'BACKUP' %}selected{% endif %}>{{ acoes_labels.get('BACKUP', 'BACKUP') }}</option>
         <option value="RESTAURACAO" {% if acao_filtro == 'RESTAURACAO' %}selected{% endif %}>{{ acoes_labels.get('RESTAURACAO', 'RESTAURACAO') }}</option>
@@ -44,7 +42,7 @@
             <thead>
                 <tr>
                     <th>Data e Hora</th>
-                    <th>Ação</th>
+                    <th class="col-log-acao">Ação</th>
                     <th>Detalhes da Alteração</th>
                 </tr>
             </thead>
@@ -53,8 +51,8 @@
                     {% for log in logs %}
                     <tr>
                         <td style="white-space: nowrap; font-size: 0.85rem; color: var(--cor-texto-mutado);">{{ log.data_hora|formata_data_hora }}</td>
-                        <td style="white-space: nowrap;">
-                            <span class="badge badge-log-{{ (log.acao or 'sistema')|lower }}">{{ acoes_labels.get(log.acao, log.acao) }}</span>
+                        <td class="col-log-acao">
+                            <span class="badge badge-log-{{ 'edicao' if log.acao == 'EDICAO_PLANILHA' else (log.acao or 'sistema')|lower }}">{{ acoes_labels.get(log.acao, log.acao) }}</span>
                         </td>
                         <td style="white-space: pre-line; font-size: 0.9rem;">{{ log.detalhes or '-' }}</td>
                     </tr>

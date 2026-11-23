@@ -114,6 +114,7 @@ class TestCasaVida(unittest.TestCase):
         self.assertIn('draggable="true"', html)
         self.assertIn('tabela-planilha-container', html)
         self.assertIn('name="operador"', html)
+        self.assertIn('col-editar-fixa', html)
 
         # Select de busca com "Todas as colunas" + 13 colunas = 14 opções
         inicio_select = html.find('<select name="coluna"')
@@ -359,6 +360,95 @@ class TestCasaVida(unittest.TestCase):
         self.assertEqual(html_asc.count('data-paciente-id='), 2)
 
         print("[PASS] Teste 08: Ordenação no cabeçalho, filtro matemático (DN > 1970), CSV sincronizado e carga completa validados.")
+
+    def test_09_tela_edicao_individual_sticky_e_exclusao(self):
+        with self.app.app_context():
+            db = get_db()
+            p = db.execute("SELECT id, prontuario_num FROM pacientes WHERE prontuario_num = '2002'").fetchone()
+            self.assertIsNotNone(p)
+            pid = p['id']
+
+        # Ícone de lápis fixo presente na tabela principal apontando para /<id>/editar (sem botão Prontuário)
+        r_index = self.client.get('/')
+        html_index = r_index.get_data(as_text=True)
+        self.assertIn(f'href="/{pid}/editar"', html_index)
+        self.assertIn('btn-icone-editar', html_index)
+        self.assertNotIn('Ver Prontuário', html_index)
+
+        # GET /<id>/editar exibe formulário limpo com os 12 campos reais
+        r_get = self.client.get(f'/{pid}/editar')
+        self.assertEqual(r_get.status_code, 200)
+        html_edit = r_get.get_data(as_text=True)
+        self.assertIn('Editar Cadastro de Assistido', html_edit)
+        self.assertIn('Maria Oliveira Santos', html_edit)
+        self.assertIn('MG-99.888.777', html_edit)
+
+        # POST /<id>/editar atualiza e grava diff detalhado em /logs/
+        r_post = self.client.post(f'/{pid}/editar', data={
+            'prontuario_num': '2002',
+            'nome': 'Maria Oliveira Atualizada',
+            'endereco': 'Av Rio Branco, 777',
+            'responsavel_1': 'Pedro Santos',
+            'telefone_1': '99111-2222',
+            'responsavel_2': 'Ana Santos',
+            'telefone_2': '99333-4444',
+            'telefone_3': '3200-1111',
+            'dn': '20/09/1982',
+            'identidade': 'MG-99.888.777',
+            'cpf': '987.654.321-11',
+            'obs': 'Atualizada pela tela individual',
+        }, follow_redirects=True)
+        self.assertEqual(r_post.status_code, 200)
+        self.assertIn('Maria Oliveira Atualizada', r_post.get_data(as_text=True))
+
+        r_logs = self.client.get('/logs/?acao=EDICAO')
+        html_logs = r_logs.get_data(as_text=True)
+        self.assertIn('Maria Oliveira Atualizada', html_logs)
+        self.assertIn('Av Rio Branco, 777', html_logs)
+
+        # POST /<id>/excluir remove, registra em pacientes_excluidos e grava log EXCLUSAO
+        r_del = self.client.post(f'/{pid}/excluir', follow_redirects=True)
+        self.assertEqual(r_del.status_code, 200)
+        with self.app.app_context():
+            db = get_db()
+            self.assertIsNone(db.execute("SELECT id FROM pacientes WHERE id = ?", (pid,)).fetchone())
+            self.assertIsNotNone(db.execute("SELECT id FROM pacientes_excluidos WHERE prontuario_num = '2002'").fetchone())
+
+        print("[PASS] Teste 09: Tela dedicada /<id>/editar, lápis fixo (sticky), logs de diff e exclusão validados.")
+
+    def test_10_acentos_ptbr_toasts_logs_e_backups(self):
+        # Cadastra nomes com acento (Ângela) e com Z (Zilda) para validar ordenação PT_BR
+        self.client.post('/novo', data={'prontuario_num': '5001', 'nome': 'Ângela Maria'})
+        self.client.post('/novo', data={'prontuario_num': '5002', 'nome': 'Zilda Maria'})
+        self.client.post('/novo', data={'prontuario_num': '5003', 'nome': 'Bruno Costa'})
+
+        # Ordem crescente (buscando dentro do <tbody>): Ângela deve vir ANTES de Bruno e de Zilda
+        html_asc = self.client.get('/', query_string={'ordem': 'nome', 'dir': 'asc'}).get_data(as_text=True)
+        tbody_asc = html_asc[html_asc.find('<tbody>'):]
+        idx_ang_asc = tbody_asc.find('Ângela Maria')
+        idx_bru_asc = tbody_asc.find('Bruno Costa')
+        idx_zil_asc = tbody_asc.find('Zilda Maria')
+        self.assertTrue(idx_ang_asc < idx_bru_asc < idx_zil_asc)
+
+        # Ordem decrescente: Zilda deve vir ANTES de Bruno, e Bruno ANTES de Ângela
+        html_desc = self.client.get('/', query_string={'ordem': 'nome', 'dir': 'desc'}).get_data(as_text=True)
+        tbody_desc = html_desc[html_desc.find('<tbody>'):]
+        idx_zil_desc = tbody_desc.find('Zilda Maria')
+        idx_bru_desc = tbody_desc.find('Bruno Costa')
+        idx_ang_desc = tbody_desc.find('Ângela Maria')
+        self.assertTrue(idx_zil_desc < idx_bru_desc < idx_ang_desc)
+
+        # Backups sem caixa amarela de recomendação
+        html_bkp = self.client.get('/backup/').get_data(as_text=True)
+        self.assertNotIn('Recomendação de Segurança para a Instituição', html_bkp)
+
+        # Logs sem 'Edição na Planilha', com ação centralizada e toast flutuante em base.html
+        html_logs = self.client.get('/logs/').get_data(as_text=True)
+        self.assertNotIn('Edição na Planilha', html_logs)
+        self.assertIn('col-log-acao', html_logs)
+        self.assertIn('toast-container', html_logs)
+
+        print("[PASS] Teste 10: Ordenação PT-BR com acentos, toasts flutuantes, logs unificados e backups limpos validados.")
 
 
 if __name__ == '__main__':

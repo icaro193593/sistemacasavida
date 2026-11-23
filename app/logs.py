@@ -6,7 +6,7 @@ bp = Blueprint('logs', __name__, url_prefix='/logs')
 ACOES_LABELS = {
     'CADASTRO': 'Novo Registro',
     'EDICAO': 'Edição',
-    'EDICAO_PLANILHA': 'Edição na Planilha',
+    'EDICAO_PLANILHA': 'Edição',
     'EXCLUSAO': 'Remoção',
     'SINCRONIZACAO_SHEETS': 'Sincronização Sheets',
     'IMPORTACAO': 'Importação CSV',
@@ -30,7 +30,9 @@ def index():
     query_base = "FROM logs_auditoria WHERE 1=1"
     params = []
 
-    if acao_filtro:
+    if acao_filtro == 'EDICAO':
+        query_base += " AND acao IN ('EDICAO', 'EDICAO_PLANILHA')"
+    elif acao_filtro:
         query_base += " AND acao = ?"
         params.append(acao_filtro)
 

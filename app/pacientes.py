@@ -138,16 +138,16 @@ def _construir_clausula_order_by(ordem, direcao):
             f"{vazio_por_ultimo}, "
             f"CASE WHEN prontuario_num GLOB '[0-9]*' THEN 0 ELSE 1 END ASC, "
             f"CAST(prontuario_num AS INTEGER) {dir_sql}, "
-            f"prontuario_num COLLATE NOCASE {dir_sql}"
+            f"prontuario_num COLLATE PT_BR {dir_sql}"
         )
     if ordem == 'dn':
         expr = _sql_expr_data_ordenavel('dn')
-        return f"CASE WHEN ({expr}) = '' THEN 1 ELSE 0 END ASC, ({expr}) {dir_sql}, nome COLLATE NOCASE ASC"
+        return f"CASE WHEN ({expr}) = '' THEN 1 ELSE 0 END ASC, ({expr}) {dir_sql}, nome COLLATE PT_BR ASC"
     if ordem == 'carimbo_data_hora':
         expr = _sql_expr_carimbo_ordenavel()
         return f"CASE WHEN ({expr}) = '' THEN 1 ELSE 0 END ASC, ({expr}) {dir_sql}, id {dir_sql}"
 
-    return f"{vazio_por_ultimo}, {ordem} COLLATE NOCASE {dir_sql}, nome COLLATE NOCASE ASC"
+    return f"{vazio_por_ultimo}, {ordem} COLLATE PT_BR {dir_sql}, nome COLLATE PT_BR ASC"
 
 
 def _construir_consulta_pacientes(args):
@@ -411,6 +411,113 @@ def novo():
     )
 
 
+@bp.route('/<int:id>/editar', methods=('GET', 'POST'))
+def editar(id):
+    db = get_db()
+    paciente = db.execute("SELECT * FROM pacientes WHERE id = ?", (id,)).fetchone()
+    if not paciente:
+        flash('Assistido não encontrado.', 'warning')
+        return redirect(url_for('pacientes.index'))
+
+    if request.method == 'POST':
+        valores_form = {
+            col: request.form.get(col, '').strip()
+            for col in CAMPOS_PLANILHA
+        }
+        nome = valores_form['nome']
+        prontuario_num = valores_form['prontuario_num']
+        cpf = valores_form['cpf'] or None
+
+        if not nome:
+            flash('O nome do assistido é obrigatório.', 'danger')
+            return render_template('pacientes/editar.html', paciente={**dict(paciente), **valores_form})
+
+        if not prontuario_num:
+            flash('O número do prontuário é obrigatório (para remover o registro, use o botão Excluir Registro).', 'danger')
+            return render_template('pacientes/editar.html', paciente={**dict(paciente), **valores_form})
+
+        novos_valores = {
+            **valores_form,
+            'prontuario_num': prontuario_num,
+            'cpf': cpf,
+        }
+        mudancas = _descrever_diferencas(paciente, novos_valores, CAMPOS_PLANILHA)
+
+        try:
+            db.execute(
+                """
+                UPDATE pacientes SET
+                    prontuario_num = ?, nome = ?, endereco = ?,
+                    responsavel_1 = ?, telefone_1 = ?, responsavel_2 = ?, telefone_2 = ?, telefone_3 = ?,
+                    dn = ?, identidade = ?, cpf = ?, obs = ?,
+                    atualizado_em = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (
+                    prontuario_num,
+                    nome,
+                    valores_form['endereco'],
+                    valores_form['responsavel_1'],
+                    valores_form['telefone_1'],
+                    valores_form['responsavel_2'],
+                    valores_form['telefone_2'],
+                    valores_form['telefone_3'],
+                    valores_form['dn'],
+                    valores_form['identidade'],
+                    cpf,
+                    valores_form['obs'],
+                    id,
+                ),
+            )
+            db.commit()
+
+            if mudancas:
+                log_audit(
+                    'EDICAO',
+                    f"Paciente {nome} (Prontuário: {prontuario_num}) alterado:\n" + "\n".join(mudancas),
+                )
+            else:
+                log_audit(
+                    'EDICAO',
+                    f"Paciente {nome} (Prontuário: {prontuario_num}) salvo sem alterações de campo.",
+                )
+
+            flash(f'Cadastro de "{nome}" atualizado com sucesso!', 'success')
+            return redirect(url_for('pacientes.index'))
+        except Exception as e:
+            db.rollback()
+            erro_str = str(e)
+            if "UNIQUE constraint failed: pacientes.cpf" in erro_str:
+                flash('Já existe outro assistido cadastrado com este CPF.', 'danger')
+            elif "UNIQUE constraint failed: pacientes.prontuario_num" in erro_str:
+                flash('Já existe outro assistido cadastrado com este número de prontuário.', 'danger')
+            else:
+                flash(f'Erro ao atualizar cadastro: {e}', 'danger')
+            return render_template('pacientes/editar.html', paciente={**dict(paciente), **valores_form})
+
+    return render_template('pacientes/editar.html', paciente=paciente)
+
+
+@bp.route('/<int:id>/excluir', methods=('POST',))
+def excluir(id):
+    db = get_db()
+    paciente = db.execute(
+        "SELECT id, nome, prontuario_num, cpf FROM pacientes WHERE id = ?",
+        (id,),
+    ).fetchone()
+    if paciente:
+        _registrar_paciente_excluido(db, paciente)
+        db.execute("DELETE FROM pacientes WHERE id = ?", (id,))
+        db.commit()
+        log_audit(
+            'EXCLUSAO',
+            f"Paciente removido: {paciente['nome']} "
+            f"(Prontuário: {paciente['prontuario_num'] or '-'}, CPF: {paciente['cpf'] or '-'})",
+        )
+        flash(f'Registro de "{paciente["nome"]}" excluído com sucesso.', 'info')
+    return redirect(url_for('pacientes.index'))
+
+
 @bp.route('/editar-lote', methods=('POST',))
 def editar_lote():
     payload = request.get_json(silent=True)
@@ -553,22 +660,15 @@ def editar_lote():
 
     for nome_final, pront_final, mudancas in resumos_edicao:
         log_audit(
-            'EDICAO_PLANILHA',
-            f"Edição direta na planilha — {nome_final} (Prontuário: {pront_final}):\n" + "\n".join(mudancas),
+            'EDICAO',
+            f"Paciente {nome_final} (Prontuário: {pront_final}) alterado:\n" + "\n".join(mudancas),
         )
 
     for del_id, nome_ex, pront_ex, cpf_ex, motivo in resumos_exclusao:
-        if motivo == 'prontuario_apagado':
-            detalhes_exclusao = (
-                f"Registro removido ao apagar o prontuário na planilha — {nome_ex} "
-                f"(Prontuário anterior: {pront_ex}, CPF: {cpf_ex}, ID: {del_id})"
-            )
-        else:
-            detalhes_exclusao = (
-                f"Remoção via edição da planilha — {nome_ex} "
-                f"(Prontuário: {pront_ex}, CPF: {cpf_ex}, ID: {del_id})"
-            )
-        log_audit('EXCLUSAO', detalhes_exclusao)
+        log_audit(
+            'EXCLUSAO',
+            f"Paciente removido: {nome_ex} (Prontuário: {pront_ex}, CPF: {cpf_ex})",
+        )
 
     partes = []
     if resumos_edicao:

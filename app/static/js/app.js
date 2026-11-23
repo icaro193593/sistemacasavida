@@ -1,6 +1,29 @@
 document.addEventListener('DOMContentLoaded', function () {
-    var botoesFechar = document.querySelectorAll('.alerta-fechar');
-    botoesFechar.forEach(function (btn) {
+    function fecharToast(alerta) {
+        if (!alerta || alerta._fechando) return;
+        alerta._fechando = true;
+        alerta.classList.add('toast-saindo');
+        setTimeout(function () {
+            alerta.remove();
+        }, 220);
+    }
+
+    function configurarToast(alerta) {
+        var btnFechar = alerta.querySelector('.alerta-fechar');
+        if (btnFechar) {
+            btnFechar.addEventListener('click', function () {
+                fecharToast(alerta);
+            });
+        }
+        setTimeout(function () {
+            fecharToast(alerta);
+        }, 5000);
+    }
+
+    document.querySelectorAll('.toast-container .alerta').forEach(configurarToast);
+
+    document.querySelectorAll('.alerta-fechar').forEach(function (btn) {
+        if (btn.closest('.toast-container')) return;
         btn.addEventListener('click', function () {
             var alerta = this.closest('.alerta');
             if (alerta) {
@@ -107,9 +130,15 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     function exibirFeedback(tipo, mensagem) {
-        var feedback = document.getElementById('sync-feedback');
-        if (!feedback) return;
-        feedback.innerHTML = '';
+        var container = document.getElementById('toast-container');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'toast-container';
+            container.className = 'toast-container';
+            container.setAttribute('role', 'status');
+            container.setAttribute('aria-live', 'polite');
+            document.body.appendChild(container);
+        }
 
         var classeAlerta = 'alerta-info';
         if (tipo === 'success') classeAlerta = 'alerta-success';
@@ -127,18 +156,11 @@ document.addEventListener('DOMContentLoaded', function () {
         btnFechar.className = 'alerta-fechar';
         btnFechar.setAttribute('aria-label', 'Fechar');
         btnFechar.innerHTML = '&times;';
-        btnFechar.addEventListener('click', function () {
-            alerta.style.opacity = '0';
-            setTimeout(function () {
-                feedback.innerHTML = '';
-                feedback.style.display = 'none';
-            }, 200);
-        });
 
         alerta.appendChild(span);
         alerta.appendChild(btnFechar);
-        feedback.appendChild(alerta);
-        feedback.style.display = 'block';
+        container.appendChild(alerta);
+        configurarToast(alerta);
     }
 
     var formSyncSheets = document.getElementById('form-sync-sheets');
@@ -789,6 +811,59 @@ document.addEventListener('DOMContentLoaded', function () {
                         }
                     });
                 }
+
+                // Redimensionamento de coluna pelo cabeçalho (estilo Excel, apenas na sessão)
+                var resizer = document.createElement('span');
+                resizer.className = 'col-resizer';
+                resizer.title = 'Arraste para redimensionar a coluna';
+                th.appendChild(resizer);
+
+                resizer.addEventListener('mousedown', function (e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+
+                    var startX = e.pageX;
+                    var startWidth = th.getBoundingClientRect().width;
+                    var colKey = th.getAttribute('data-col-key');
+                    arrastouRecentemente = true;
+                    th.setAttribute('draggable', 'false');
+                    resizer.classList.add('ativo');
+                    document.body.style.cursor = 'col-resize';
+
+                    function aoMover(ev) {
+                        var novaLargura = Math.max(56, Math.round(startWidth + (ev.pageX - startX)));
+                        var px = novaLargura + 'px';
+                        th.style.width = px;
+                        th.style.minWidth = px;
+                        th.style.maxWidth = px;
+
+                        if (tbodyEl && colKey) {
+                            Array.prototype.forEach.call(
+                                tbodyEl.querySelectorAll('td[data-campo="' + colKey + '"]'),
+                                function (td) {
+                                    td.style.width = px;
+                                    td.style.minWidth = px;
+                                    td.style.maxWidth = px;
+                                    td.classList.add('celula-redimensionada');
+                                }
+                            );
+                        }
+                    }
+
+                    function aoSoltar() {
+                        document.removeEventListener('mousemove', aoMover);
+                        document.removeEventListener('mouseup', aoSoltar);
+                        resizer.classList.remove('ativo');
+                        document.body.style.cursor = '';
+                        th.setAttribute('draggable', 'true');
+                        setTimeout(function () {
+                            arrastouRecentemente = false;
+                        }, 80);
+                    }
+
+                    document.addEventListener('mousemove', aoMover);
+                    document.addEventListener('mouseup', aoSoltar);
+                });
             });
         }
     }

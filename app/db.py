@@ -1,8 +1,34 @@
 import sqlite3
 import os
 import datetime
+import unicodedata
 from flask import g, current_app
 import config
+
+
+def _chave_ordenacao_ptbr(texto):
+    if texto is None:
+        return ''
+    decomposed = unicodedata.normalize('NFKD', str(texto).strip())
+    sem_acentos = ''.join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return sem_acentos.casefold()
+
+
+def _collate_ptbr(a, b):
+    ka = _chave_ordenacao_ptbr(a)
+    kb = _chave_ordenacao_ptbr(b)
+    if ka < kb:
+        return -1
+    if ka > kb:
+        return 1
+    sa = '' if a is None else str(a).casefold()
+    sb = '' if b is None else str(b).casefold()
+    if sa < sb:
+        return -1
+    if sa > sb:
+        return 1
+    return 0
+
 
 def get_db():
     if 'db' not in g:
@@ -12,6 +38,7 @@ def get_db():
             detect_types=sqlite3.PARSE_DECLTYPES
         )
         g.db.row_factory = sqlite3.Row
+        g.db.create_collation('PT_BR', _collate_ptbr)
         g.db.execute('PRAGMA foreign_keys = ON;')
         g.db.execute('PRAGMA journal_mode = WAL;')
         g.db.execute('PRAGMA synchronous = NORMAL;')

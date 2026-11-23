@@ -152,6 +152,69 @@ body {
   flex: 1;
 }
 
+.toast-container {
+  position: fixed;
+  top: 74px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1050;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.45rem;
+  width: max-content;
+  max-width: min(440px, 92vw);
+  pointer-events: none;
+}
+
+.toast-container .alerta {
+  pointer-events: auto;
+  padding: 0.55rem 0.9rem;
+  margin-bottom: 0;
+  font-size: 0.85rem;
+  line-height: 1.35;
+  gap: 0.75rem;
+  border-radius: 10px;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.16);
+  transition: opacity 0.22s ease, transform 0.22s ease;
+  animation: toastEntrar 0.2s ease-out;
+}
+
+.toast-container .alerta.toast-saindo {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+@keyframes toastEntrar {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.col-log-acao {
+  text-align: center !important;
+  vertical-align: middle;
+  width: 170px;
+}
+
+.col-log-acao .badge {
+  display: inline-block;
+  background-color: transparent !important;
+  border-radius: 0;
+  padding: 0;
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-transform: none;
+  text-align: center;
+  white-space: normal;
+  line-height: 1.3;
+}
+
 .alerta {
   padding: 0.85rem 1.25rem;
   border-radius: var(--raio);
@@ -560,11 +623,109 @@ body {
   border-right: none;
 }
 
+.tabela-planilha th.col-editar-fixa {
+  position: sticky;
+  right: 0;
+  top: 0;
+  z-index: 8;
+  width: 50px;
+  min-width: 50px;
+  max-width: 54px;
+  padding: 0.55rem 0.35rem;
+  text-align: center;
+  background-color: #f8fafc;
+  box-shadow: -4px 0 8px rgba(0, 0, 0, 0.06), inset 0 -2px 0 var(--cor-borda);
+  border-left: 1px solid var(--cor-borda);
+}
+
+.tabela-planilha td.col-editar-fixa {
+  position: sticky;
+  right: 0;
+  z-index: 3;
+  width: 50px;
+  min-width: 50px;
+  max-width: 54px;
+  padding: 0.35rem;
+  text-align: center;
+  box-shadow: -4px 0 8px rgba(0, 0, 0, 0.06);
+  border-left: 1px solid var(--cor-borda);
+}
+
+.tabela-planilha tbody tr:nth-child(odd) td.col-editar-fixa {
+  background-color: #ffffff;
+}
+
+.tabela-planilha tbody tr:nth-child(even) td.col-editar-fixa {
+  background-color: #f3f4f6;
+}
+
+.tabela-planilha tbody tr:hover td.col-editar-fixa {
+  background-color: var(--cor-primaria-light);
+}
+
+.btn-icone-editar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  color: var(--cor-texto-mutado);
+  text-decoration: none;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.btn-icone-editar:hover {
+  background-color: rgba(30, 58, 95, 0.12);
+  color: var(--cor-primaria);
+}
+
+.tabela-modo-edicao .col-editar-fixa {
+  display: none;
+}
+
 .tabela-planilha td[data-campo="prontuario_num"],
 .tabela-planilha td[data-campo="dn"],
 .tabela-planilha td[data-campo="cpf"],
 .tabela-planilha td[data-campo="carimbo_data_hora"] {
   white-space: nowrap;
+}
+
+.tabela-planilha th[data-col-key="prontuario_num"],
+.tabela-planilha td[data-campo="prontuario_num"] {
+  width: 92px;
+  min-width: 82px;
+  max-width: 115px;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+  text-align: center;
+}
+
+.tabela-modo-edicao td[data-campo="prontuario_num"] .input-celula {
+  min-width: 68px;
+  width: 78px;
+  text-align: center;
+}
+
+.col-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 6;
+}
+
+.col-resizer:hover,
+.col-resizer.ativo {
+  background-color: var(--cor-secundaria);
+  opacity: 0.55;
+}
+
+.celula-redimensionada {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tabela-planilha td[data-campo="nome"] {
@@ -887,7 +1048,7 @@ textarea.form-controle {
     background-color: #ffffff;
     font-size: 11pt;
   }
-  .navbar, .rodape, .btn-nao-imprimir, .alerta {
+  .navbar, .rodape, .btn-nao-imprimir, .alerta, .toast-container {
     display: none !important;
   }
   .container {
@@ -1199,59 +1360,45 @@ textarea.form-controle {
 }
 
 /* =========================================================
-   Badges da Página de Logs
+   Estilos de Texto da Coluna Ação na Página de Logs
    ========================================================= */
 .badge-log-cadastro {
-  background-color: var(--cor-sucesso-bg);
   color: var(--cor-sucesso-texto);
 }
 
-.badge-log-edicao {
-  background-color: var(--cor-info-bg);
+.badge-log-edicao,
+.badge-log-edicao_planilha {
   color: var(--cor-info-texto);
 }
 
-.badge-log-edicao_planilha {
-  background-color: #ccfbf1;
-  color: #0f766e;
-}
-
 .badge-log-exclusao {
-  background-color: var(--cor-perigo-bg);
   color: var(--cor-perigo-texto);
 }
 
 .badge-log-sincronizacao_sheets {
-  background-color: #e0e7ff;
   color: #3730a3;
 }
 
 .badge-log-importacao {
-  background-color: #f3e8ff;
   color: #6b21a8;
 }
 
 .badge-log-exportacao {
-  background-color: #e0f2fe;
   color: #075985;
 }
 
 .badge-log-atendimento {
-  background-color: #fef3c7;
   color: #92400e;
 }
 
 .badge-log-backup {
-  background-color: #e2e8f0;
   color: #1e3a5f;
 }
 
 .badge-log-download_backup {
-  background-color: #f1f5f9;
   color: #334155;
 }
 
 .badge-log-restauracao {
-  background-color: #ffedd5;
   color: #9a3412;
 }
