@@ -2,13 +2,18 @@ import os
 import shutil
 import datetime
 from flask import (
-    Blueprint, flash, g, redirect, render_template, request, url_for, send_file
+    Blueprint, current_app, flash, redirect, render_template, request, url_for, send_file
 )
 import config
-from app.auth import login_required, admin_required
 from app.db import get_db, log_audit
 
 bp = Blueprint('backup', __name__, url_prefix='/backup')
+
+def _get_database_path():
+    try:
+        return current_app.config.get('DATABASE') or config.DATABASE_PATH
+    except RuntimeError:
+        return config.DATABASE_PATH
 
 def obter_tamanho_formatado(num_bytes):
     if num_bytes < 1024:
@@ -36,7 +41,8 @@ def listar_backups():
     return arquivos
 
 def executar_backup(tipo='manual'):
-    if not os.path.exists(config.DATABASE_PATH):
+    db_path = _get_database_path()
+    if not os.path.exists(db_path):
         return None, "Banco de dados principal não encontrado."
 
     os.makedirs(config.BACKUPS_DIR, exist_ok=True)
@@ -45,15 +51,15 @@ def executar_backup(tipo='manual'):
     caminho_backup = os.path.join(config.BACKUPS_DIR, nome_backup)
 
     try:
-        shutil.copy2(config.DATABASE_PATH, caminho_backup)
+        shutil.copy2(db_path, caminho_backup)
         tamanho = os.path.getsize(caminho_backup)
 
         try:
             db = get_db()
             db.execute("""
-                INSERT INTO backups_registro (nome_arquivo, tamanho_bytes, tipo, usuario_id)
-                VALUES (?, ?, ?, ?)
-            """, (nome_backup, tamanho, tipo, g.user['id'] if g.user else None))
+                INSERT INTO backups_registro (nome_arquivo, tamanho_bytes, tipo)
+                VALUES (?, ?, ?)
+            """, (nome_backup, tamanho, tipo))
             db.commit()
         except Exception:
             pass
@@ -63,44 +69,41 @@ def executar_backup(tipo='manual'):
         return None, str(e)
 
 @bp.route('/')
-@login_required
 def index():
+    db_path = _get_database_path()
     backups = listar_backups()
     tamanho_atual = "0 KB"
-    if os.path.exists(config.DATABASE_PATH):
-        tamanho_atual = obter_tamanho_formatado(os.path.getsize(config.DATABASE_PATH))
+    if os.path.exists(db_path):
+        tamanho_atual = obter_tamanho_formatado(os.path.getsize(db_path))
 
     return render_template(
         'backups.html',
         backups=backups,
         tamanho_atual=tamanho_atual,
-        caminho_banco=config.DATABASE_PATH
+        caminho_banco=db_path
     )
 
 @bp.route('/criar', methods=('POST',))
-@login_required
 def criar():
     nome, erro = executar_backup(tipo='manual')
     if erro:
         flash(f'Erro ao gerar backup: {erro}', 'danger')
     else:
-        log_audit('BACKUP', f"Backup criado: {nome}", g.user['id'], g.user['nome_completo'])
+        log_audit('BACKUP', f"Backup criado: {nome}")
         flash(f'Backup "{nome}" gerado com sucesso!', 'success')
     return redirect(url_for('backup.index'))
 
 @bp.route('/download/<nome_arquivo>')
-@login_required
 def download(nome_arquivo):
     nome_seguro = os.path.basename(nome_arquivo)
     caminho = os.path.join(config.BACKUPS_DIR, nome_seguro)
     if os.path.exists(caminho):
-        log_audit('DOWNLOAD_BACKUP', f"Download do backup {nome_seguro}", g.user['id'], g.user['nome_completo'])
+        log_audit('DOWNLOAD_BACKUP', f"Download do backup {nome_seguro}")
         return send_file(caminho, as_attachment=True, download_name=nome_seguro)
     flash('Arquivo de backup não encontrado.', 'danger')
     return redirect(url_for('backup.index'))
 
 @bp.route('/restaurar/<nome_arquivo>', methods=('POST',))
-@admin_required
 def restaurar(nome_arquivo):
     nome_seguro = os.path.basename(nome_arquivo)
     caminho = os.path.join(config.BACKUPS_DIR, nome_seguro)
@@ -110,9 +113,10 @@ def restaurar(nome_arquivo):
         return redirect(url_for('backup.index'))
 
     try:
+        db_path = _get_database_path()
         executar_backup(tipo='pre_restauracao')
-        shutil.copy2(caminho, config.DATABASE_PATH)
-        log_audit('RESTAURACAO', f"Banco restaurado a partir de {nome_seguro}", g.user['id'], g.user['nome_completo'])
+        shutil.copy2(caminho, db_path)
+        log_audit('RESTAURACAO', f"Banco restaurado a partir de {nome_seguro}")
         flash(f'Banco de dados restaurado com sucesso para a versão de "{nome_seguro}"!', 'success')
     except Exception as e:
         flash(f'Erro ao restaurar banco: {e}', 'danger')

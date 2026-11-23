@@ -1,7 +1,7 @@
 import sqlite3
 import os
+import datetime
 from flask import g, current_app
-from werkzeug.security import generate_password_hash
 import config
 
 def get_db():
@@ -36,27 +36,17 @@ def init_db(db_path=None):
     
     with open(config.SCHEMA_PATH, 'r', encoding='utf-8') as f:
         db.executescript(f.read())
-        
-    cur = db.cursor()
-    cur.execute("SELECT COUNT(*) AS total FROM usuarios")
-    row = cur.fetchone()
-    
-    if row['total'] == 0:
-        senha_hash = generate_password_hash("admin123")
-        cur.execute("""
-            INSERT INTO usuarios (username, senha_hash, nome_completo, perfil, ativo)
-            VALUES (?, ?, ?, ?, ?)
-        """, ('admin', senha_hash, 'Administrador Casa Vida', 'admin', 1))
-        db.commit()
+
     db.close()
 
-def log_audit(acao, detalhes="", usuario_id=None, usuario_nome=None):
+def log_audit(acao, detalhes="", *args, **kwargs):
     try:
         db = get_db()
+        agora = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         db.execute("""
-            INSERT INTO logs_auditoria (usuario_id, usuario_nome, acao, detalhes)
-            VALUES (?, ?, ?, ?)
-        """, (usuario_id, usuario_nome, acao, detalhes))
+            INSERT INTO logs_auditoria (acao, detalhes, data_hora)
+            VALUES (?, ?, ?)
+        """, (acao, detalhes, agora))
         db.commit()
     except Exception as e:
         print(f"[AVISO] Falha ao registrar log de auditoria: {e}")

@@ -77,13 +77,11 @@
                                 Baixar
                             </a>
 
-                            {% if g.user.perfil == 'admin' %}
                             <form method="post" action="{{ url_for('backup.restaurar', nome_arquivo=b.nome) }}" class="confirmar-acao" data-confirmacao="ATENÇÃO: Restaurar este backup substituirá os dados atuais do banco pelo ponto selecionado. Uma cópia de segurança prévia será gerada automaticamente. Deseja prosseguir?" style="display: inline;">
                                 <button type="submit" class="btn btn-sm btn-outline" style="color: var(--cor-perigo); border-color: #fecaca;" title="Restaurar Banco de Dados">
                                     Restaurar
                                 </button>
                             </form>
-                            {% endif %}
                         </td>
                     </tr>
                     {% endfor %}

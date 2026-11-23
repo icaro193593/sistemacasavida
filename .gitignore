@@ -19,3 +19,15 @@ Thumbs.db
 Desktop.ini
 
 *.log
+.env
+.env.*
+!.env.example
+
+# Bancos de dados SQLite e credenciais locais (NUNCA enviar ao GitHub)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+credentials*.json
+service-account*.json

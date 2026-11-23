@@ -2,7 +2,7 @@ import os
 import datetime
 from flask import Flask, send_from_directory
 import config
-from app import db, auth, pacientes, backup
+from app import db, pacientes, backup, logs
 
 def create_app(test_config=None):
     app = Flask(__name__, instance_relative_config=True)
@@ -13,9 +13,9 @@ def create_app(test_config=None):
 
     db.init_app(app)
 
-    app.register_blueprint(auth.bp)
     app.register_blueprint(pacientes.bp)
     app.register_blueprint(backup.bp)
+    app.register_blueprint(logs.bp)
 
     with app.app_context():
         db.init_db()
@@ -59,6 +59,36 @@ def create_app(test_config=None):
                 return f"{dia}/{mes}/{ano} {hora_part[:5]}"
             elif '-' in s:
                 partes = s.split('-')
+                if len(partes) == 3:
+                    return f"{partes[2]}/{partes[1]}/{partes[0]}"
+            return valor
+        except Exception:
+            return valor
+
+    @app.template_filter('formata_data_hora')
+    def formata_data_hora_filter(valor):
+        if not valor:
+            return '-'
+        try:
+            if isinstance(valor, datetime.datetime):
+                return valor.strftime('%d/%m/%Y %H:%M:%S')
+            if hasattr(valor, 'strftime'):
+                return valor.strftime('%d/%m/%Y')
+            s = str(valor).strip()
+            if not s:
+                return '-'
+            s_norm = s.replace('T', ' ', 1)
+            if ' ' in s_norm:
+                data_part, hora_part = s_norm.split(' ', 1)
+                partes_data = data_part.split('-')
+                if len(partes_data) == 3:
+                    ano, mes, dia = partes_data
+                    hora_limpa = hora_part.split('.')[0].strip()
+                    if hora_limpa:
+                        return f"{dia}/{mes}/{ano} {hora_limpa[:8]}"
+                    return f"{dia}/{mes}/{ano}"
+            elif '-' in s_norm:
+                partes = s_norm.split('-')
                 if len(partes) == 3:
                     return f"{partes[2]}/{partes[1]}/{partes[0]}"
             return valor

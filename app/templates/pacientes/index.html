@@ -3,152 +3,123 @@
 {% block title %}Assistidos{% endblock %}
 
 {% block content %}
-<div class="grid-stats">
-    <div class="card-stat">
-        <div class="card-stat-icone" style="background-color: var(--cor-primaria-light); color: var(--cor-primaria);">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
-        </div>
-        <div>
-            <div class="card-stat-valor">{{ stats.total }}</div>
-            <div class="card-stat-rotulo">Total de Assistidos</div>
-        </div>
-    </div>
-
-    <div class="card-stat">
-        <div class="card-stat-icone" style="background-color: var(--cor-sucesso-bg); color: var(--cor-sucesso);">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
-        </div>
-        <div>
-            <div class="card-stat-valor">{{ stats.ativos }}</div>
-            <div class="card-stat-rotulo">Assistidos Ativos</div>
-        </div>
-    </div>
-
-    <div class="card-stat">
-        <div class="card-stat-icone" style="background-color: var(--cor-aviso-bg); color: var(--cor-aviso);">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 14 14"></polyline></svg>
-        </div>
-        <div>
-            <div class="card-stat-valor">{{ stats.espera }}</div>
-            <div class="card-stat-rotulo">Fila de Espera</div>
-        </div>
-    </div>
-
-    <div class="card-stat">
-        <div class="card-stat-icone" style="background-color: var(--cor-info-bg); color: var(--cor-info);">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
-        </div>
-        <div>
-            <div class="card-stat-valor">{{ stats.atendimentos_mes }}</div>
-            <div class="card-stat-rotulo">Atendimentos no Mês</div>
-        </div>
-    </div>
-</div>
-
 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem;">
     <div>
         <h1 style="font-size: 1.5rem; color: var(--cor-primaria); font-weight: 700;">Assistidos e Prontuários</h1>
         <p style="font-size: 0.85rem; color: var(--cor-texto-mutado);">{{ total_registros }} registro(s) encontrado(s)</p>
     </div>
-    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
         <a href="{{ url_for('pacientes.novo') }}" class="btn btn-primario">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
             Novo Paciente
         </a>
-        <a href="{{ url_for('pacientes.exportar_csv') }}" class="btn btn-outline" title="Exportar dados para Excel/CSV">
+        <button type="button" id="btn-editar-planilha" class="btn btn-outline" title="Editar células diretamente na planilha">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+            Editar
+        </button>
+        <form method="post" action="{{ url_for('pacientes.sincronizar_sheets') }}" id="form-sync-sheets" style="display: inline;">
+            <button type="submit" id="btn-sync-sheets" class="btn btn-secundario btn-sync" title="Sincronizar dados com a planilha do Google Sheets">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                <span class="btn-sync-texto">Sincronizar Google Sheets</span>
+            </button>
+        </form>
+        <a href="{{ url_for('pacientes.exportar_csv', busca=termo, coluna=coluna_filtro, operador=operador_filtro, ordem=ordem, dir=direcao) }}" id="btn-exportar-csv" class="btn btn-outline" title="Exportar {% if termo %}os {{ total_registros }} registro(s) filtrados{% else %}todos os {{ total_registros }} registros{% endif %} para Excel/CSV">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-            Exportar CSV
+            Exportar CSV{% if termo %} ({{ total_registros }}){% endif %}
         </a>
     </div>
 </div>
 
+<div id="sync-feedback" class="sync-feedback" style="display: none;" role="status" aria-live="polite"></div>
+
 <form method="get" class="barra-filtros">
+    <input type="hidden" name="ordem" value="{{ ordem }}">
+    <input type="hidden" name="dir" value="{{ direcao }}">
     <div class="busca-input-grupo">
         <svg class="busca-icone" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-        <input type="text" name="busca" class="busca-input" placeholder="Buscar por nome, prontuário, CPF ou tipo de câncer..." value="{{ termo }}">
+        <input type="text" name="busca" class="busca-input" placeholder="Pesquisar (ex: Maria, 1970, > 1970)..." value="{{ termo }}">
     </div>
 
-    <select name="status" class="filtro-select" onchange="this.form.submit()">
-        <option value="">Status: Todos</option>
-        <option value="Ativo" {% if status_filtro == 'Ativo' %}selected{% endif %}>Ativo</option>
-        <option value="Em Espera" {% if status_filtro == 'Em Espera' %}selected{% endif %}>Em Espera</option>
-        <option value="Desligado" {% if status_filtro == 'Desligado' %}selected{% endif %}>Desligado</option>
-        <option value="Óbito" {% if status_filtro == 'Óbito' %}selected{% endif %}>Óbito</option>
+    <select name="coluna" class="filtro-select" aria-label="Coluna alvo da busca">
+        <option value="todas" {% if not coluna_filtro or coluna_filtro == 'todas' %}selected{% endif %}>Buscar em: Todas as colunas</option>
+        {% for col_key, col_label, _ in colunas_planilha %}
+        <option value="{{ col_key }}" {% if coluna_filtro == col_key %}selected{% endif %}>{{ col_label }}</option>
+        {% endfor %}
+    </select>
+
+    <select name="operador" class="filtro-select" aria-label="Operador do filtro">
+        {% for op_key, op_label in operadores_filtro %}
+        <option value="{{ op_key }}" {% if operador_filtro == op_key %}selected{% endif %}>{{ op_label }}</option>
+        {% endfor %}
     </select>
 
     <button type="submit" class="btn btn-secundario">Filtrar</button>
-    {% if termo or status_filtro or diagnostico_filtro %}
+    {% if termo or (coluna_filtro and coluna_filtro != 'todas') or (operador_filtro and operador_filtro != 'contem') %}
     <a href="{{ url_for('pacientes.index') }}" class="btn btn-outline">Limpar Filtros</a>
     {% endif %}
 </form>
 
-<div class="card">
-    <div class="tabela-container">
-        <table class="tabela">
+<div id="barra-edicao-planilha" class="barra-edicao-planilha" style="display: none;">
+    <div class="barra-edicao-info">
+        <span>Modo de edição direta ativo — edite as células diretamente. Apagar o <strong>Prontuário</strong> por completo marca o registro para exclusão.</span>
+        <span id="contador-alteracoes" class="badge badge-espera">0 alteração(ões)</span>
+    </div>
+    <div class="barra-edicao-acoes">
+        <button type="button" id="btn-cancelar-edicao" class="btn btn-outline">Cancelar</button>
+        <button type="button" id="btn-aplicar-edicoes" class="btn btn-sucesso">Aplicar Edições</button>
+    </div>
+</div>
+
+<div class="card card-planilha">
+    <div class="tabela-container tabela-planilha-container" id="container-tabela-assistidos">
+        <table class="tabela tabela-planilha"
+               id="tabela-assistidos"
+               data-url-editar-lote="{{ url_for('pacientes.editar_lote') }}">
             <thead>
                 <tr>
-                    <th>Prontuário</th>
-                    <th>Nome do Assistido</th>
-                    <th>CPF</th>
-                    <th>Diagnóstico Oncológico</th>
-                    <th>Telefone / Contato</th>
-                    <th>Bairro / Cidade</th>
-                    <th>Status</th>
-                    <th style="text-align: right;">Ações</th>
+                    {% for col_key, col_label, _ in colunas_planilha %}
+                    {% set proxima_dir = 'desc' if ordem == col_key and direcao == 'asc' else 'asc' %}
+                    <th draggable="true"
+                        data-col-key="{{ col_key }}"
+                        class="th-interativo {% if ordem == col_key %}th-ordenado{% endif %}"
+                        title="Clique para ordenar por {{ col_label }} ou arraste para reordenar colunas">
+                        <a href="{{ url_for('pacientes.index', busca=termo, coluna=coluna_filtro, operador=operador_filtro, ordem=col_key, dir=proxima_dir) }}"
+                           class="th-sort-link"
+                           draggable="false">
+                            <span class="th-label">{{ col_label }}</span>
+                            <span class="sort-icone" aria-hidden="true">
+                                {% if ordem == col_key %}
+                                    {% if direcao == 'asc' %}&#9650;{% else %}&#9660;{% endif %}
+                                {% else %}
+                                    &#8693;
+                                {% endif %}
+                            </span>
+                        </a>
+                    </th>
+                    {% endfor %}
                 </tr>
             </thead>
             <tbody>
                 {% if pacientes %}
                     {% for p in pacientes %}
-                    <tr>
-                        <td>
-                            <code style="font-weight: 600; color: var(--cor-primaria);">{{ p.prontuario_num or ('# ' ~ p.id) }}</code>
-                        </td>
-                        <td>
-                            <a href="{{ url_for('pacientes.detalhes', id=p.id) }}" style="font-weight: 600; color: var(--cor-texto); text-decoration: none;">
-                                {{ p.nome }}
-                            </a>
-                        </td>
-                        <td style="font-size: 0.85rem; color: var(--cor-texto-mutado);">
-                            {{ p.cpf|formata_cpf }}
-                        </td>
-                        <td>
-                            {% if p.diagnostico %}
-                            <span style="font-size: 0.88rem;">{{ p.diagnostico }}</span>
+                    <tr data-paciente-id="{{ p.id }}" data-paciente-nome="{{ p.nome }}" data-paciente-prontuario="{{ p.prontuario_num or '' }}">
+                        {% for col_key, col_label, editavel in colunas_planilha %}
+                        <td data-campo="{{ col_key }}"
+                            {% if editavel %}data-editavel="true" data-label="{{ col_label }}" data-original="{{ p[col_key] or '' }}"{% endif %}>
+                            {% if col_key == 'prontuario_num' %}
+                                <code class="celula-prontuario">{{ p.prontuario_num or '-' }}</code>
+                            {% elif col_key == 'nome' %}
+                                <strong>{{ p.nome }}</strong>
                             {% else %}
-                            <span style="color: var(--cor-texto-mutado);">-</span>
+                                {{ p[col_key] or '-' }}
                             {% endif %}
                         </td>
-                        <td style="font-size: 0.88rem;">
-                            {{ p.telefone|formata_telefone or p.whatsapp|formata_telefone }}
-                        </td>
-                        <td style="font-size: 0.85rem; color: var(--cor-texto-mutado);">
-                            {{ p.endereco_bairro or '-' }} / {{ p.endereco_cidade or 'JF' }}
-                        </td>
-                        <td>
-                            {% if p.status_instituto == 'Ativo' %}
-                            <span class="badge badge-ativo">Ativo</span>
-                            {% elif p.status_instituto == 'Em Espera' %}
-                            <span class="badge badge-espera">Em Espera</span>
-                            {% elif p.status_instituto == 'Óbito' %}
-                            <span class="badge badge-obito">Óbito</span>
-                            {% else %}
-                            <span class="badge badge-desligado">{{ p.status_instituto or 'Desligado' }}</span>
-                            {% endif %}
-                        </td>
-                        <td style="text-align: right; white-space: nowrap;">
-                            <a href="{{ url_for('pacientes.detalhes', id=p.id) }}" class="btn btn-sm btn-outline" title="Ver Prontuário">
-                                Prontuário
-                            </a>
-                            <a href="{{ url_for('pacientes.editar', id=p.id) }}" class="btn btn-sm btn-outline" title="Editar Cadastro">
-                                Editar
-                            </a>
-                        </td>
+                        {% endfor %}
                     </tr>
                     {% endfor %}
                 {% else %}
                     <tr>
-                        <td colspan="8" style="text-align: center; padding: 2.5rem; color: var(--cor-texto-mutado);">
+                        <td colspan="13" style="text-align: center; padding: 2.5rem; color: var(--cor-texto-mutado);">
                             <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin-bottom: 0.5rem; opacity: 0.5;"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                             <p style="font-weight: 500;">Nenhum assistido encontrado com os filtros informados.</p>
                             <a href="{{ url_for('pacientes.novo') }}" class="btn btn-primario btn-sm" style="margin-top: 0.75rem;">Cadastrar Novo Assistido</a>
@@ -160,26 +131,21 @@
     </div>
 </div>
 
-{% if total_paginas > 1 %}
-<div class="paginacao">
-    <div>Página {{ pagina }} de {{ total_paginas }}</div>
-    <div class="paginacao-links">
-        {% if pagina > 1 %}
-        <a href="{{ url_for('pacientes.index', pagina=pagina-1, busca=termo, status=status_filtro) }}" class="paginacao-btn">&laquo; Anterior</a>
-        {% endif %}
-
-        {% for p_num in range(1, total_paginas + 1) %}
-            {% if p_num == pagina %}
-            <span class="paginacao-btn ativo">{{ p_num }}</span>
-            {% elif p_num <= 3 or p_num >= total_paginas - 2 or (p_num >= pagina - 1 and p_num <= pagina + 1) %}
-            <a href="{{ url_for('pacientes.index', pagina=p_num, busca=termo, status=status_filtro) }}" class="paginacao-btn">{{ p_num }}</a>
-            {% endif %}
-        {% endfor %}
-
-        {% if pagina < total_paginas %}
-        <a href="{{ url_for('pacientes.index', pagina=pagina+1, busca=termo, status=status_filtro) }}" class="paginacao-btn">Próxima &raquo;</a>
-        {% endif %}
+<div id="modal-confirmar-edicoes" class="modal-overlay" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="modal-titulo-edicoes">
+    <div class="modal-box">
+        <div class="modal-cabecalho">
+            <h2 id="modal-titulo-edicoes">Confirmar Alterações na Planilha</h2>
+            <button type="button" id="btn-modal-fechar" class="modal-fechar" aria-label="Fechar modal">&times;</button>
+        </div>
+        <div class="modal-corpo">
+            <p id="modal-resumo-texto" class="modal-resumo-texto"></p>
+            <div id="modal-lista-mudancas" class="modal-lista-mudancas"></div>
+            <div id="modal-erro-edicao" class="alerta alerta-danger" style="display: none; margin-top: 1rem; margin-bottom: 0;"></div>
+        </div>
+        <div class="modal-rodape">
+            <button type="button" id="btn-modal-cancelar" class="btn btn-outline">Voltar e Revisar</button>
+            <button type="button" id="btn-confirmar-edicoes" class="btn btn-sucesso">Confirmar e Salvar no Banco</button>
+        </div>
     </div>
 </div>
-{% endif %}
 {% endblock %}

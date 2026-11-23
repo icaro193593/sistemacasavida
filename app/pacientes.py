@@ -2,467 +2,658 @@ import csv
 import io
 import datetime
 from flask import (
-    Blueprint, flash, g, redirect, render_template, request, url_for, Response, send_file
+    Blueprint, current_app, flash, jsonify, redirect, render_template, request, url_for, Response
 )
-from app.auth import login_required, admin_required
 from app.db import get_db, log_audit
+from app.sheets_sync import sincronizar_csv_no_banco, sincronizar_google_sheets
 
 bp = Blueprint('pacientes', __name__)
 
-def gerar_numero_prontuario(db):
-    ano_atual = datetime.date.today().year
-    prefixo = f"CV-{ano_atual}-"
-    row = db.execute(
-        "SELECT prontuario_num FROM pacientes WHERE prontuario_num LIKE ? ORDER BY id DESC LIMIT 1",
-        (f"{prefixo}%",)
-    ).fetchone()
+COLUNAS_PLANILHA = [
+    ('prontuario_num', 'Prontuário', True),
+    ('nome', 'Nome', True),
+    ('endereco', 'Endereço', True),
+    ('responsavel_1', 'Responsável 1', True),
+    ('telefone_1', 'Telefone 1', True),
+    ('responsavel_2', 'Responsável 2', True),
+    ('telefone_2', 'Telefone 2', True),
+    ('telefone_3', 'Telefone 3', True),
+    ('dn', 'DN', True),
+    ('identidade', 'ID', True),
+    ('cpf', 'CPF', True),
+    ('obs', 'Obs', True),
+    ('carimbo_data_hora', 'Carimbo de data/hora', False),
+]
 
-    if row and row['prontuario_num']:
+CAMPOS_PLANILHA = {col: label for col, label, editavel in COLUNAS_PLANILHA if editavel}
+
+_CHAVES_PLANILHA = [col for col, _, _ in COLUNAS_PLANILHA]
+_LABELS_POR_COLUNA = {col: label for col, label, _ in COLUNAS_PLANILHA}
+_CLAUSULA_CPF_SEM_PONTOS = "REPLACE(REPLACE(COALESCE(cpf, ''), '.', ''), '-', '') LIKE ?"
+
+OPERADORES_FILTRO = [
+    ('contem', 'Contém'),
+    ('igual', 'Igual a (=)'),
+    ('maior', 'Maior que (>)'),
+    ('maior_igual', 'Maior ou igual (>=)'),
+    ('menor', 'Menor que (<)'),
+    ('menor_igual', 'Menor ou igual (<=)'),
+]
+_OPERADORES_VALIDOS = {op for op, _ in OPERADORES_FILTRO}
+_MAPA_OP_SQL = {
+    'igual': '=',
+    'maior': '>',
+    'maior_igual': '>=',
+    'menor': '<',
+    'menor_igual': '<=',
+}
+_COLUNAS_DATA = {'dn', 'carimbo_data_hora'}
+
+FILTROS_COLUNAS = {
+    'todas': (
+        "("
+        + " OR ".join(f"{col} LIKE ?" for col in _CHAVES_PLANILHA)
+        + f" OR {_CLAUSULA_CPF_SEM_PONTOS})"
+    ),
+    **{
+        col: (
+            f"(cpf LIKE ? OR {_CLAUSULA_CPF_SEM_PONTOS})"
+            if col == 'cpf'
+            else f"{col} LIKE ?"
+        )
+        for col in _CHAVES_PLANILHA
+    },
+}
+
+COLUNAS_EXPORTACAO = [
+    ('carimbo_data_hora', 'Carimbo de data/hora'),
+] + [(col, label) for col, label, editavel in COLUNAS_PLANILHA if editavel]
+
+
+def _sql_expr_data_ordenavel(col):
+    """Converte DD/MM/YYYY ou YYYY-MM-DD em YYYYMMDD para comparação/ordenação no SQLite."""
+    return (
+        f"CASE "
+        f"WHEN {col} LIKE '__/__/____%' THEN substr({col}, 7, 4) || substr({col}, 4, 2) || substr({col}, 1, 2) "
+        f"WHEN {col} LIKE '____-__-__%' THEN substr({col}, 1, 4) || substr({col}, 6, 2) || substr({col}, 9, 2) "
+        f"ELSE '' END"
+    )
+
+
+def _sql_expr_carimbo_ordenavel():
+    """Converte DD/MM/YYYY HH:MM:SS em YYYYMMDDHH:MM:SS para ordenação cronológica exata."""
+    return (
+        "CASE "
+        "WHEN carimbo_data_hora LIKE '__/__/____%' THEN "
+        "substr(carimbo_data_hora, 7, 4) || substr(carimbo_data_hora, 4, 2) || substr(carimbo_data_hora, 1, 2) || substr(carimbo_data_hora, 11) "
+        "WHEN carimbo_data_hora LIKE '____-__-__%' THEN "
+        "substr(carimbo_data_hora, 1, 4) || substr(carimbo_data_hora, 6, 2) || substr(carimbo_data_hora, 9, 2) || substr(carimbo_data_hora, 11) "
+        "ELSE '' END"
+    )
+
+
+def _parse_valor_data_filtro(texto):
+    """Retorna ('ano', 'YYYY') ou ('data', 'YYYYMMDD') ou None."""
+    s = (texto or '').strip()
+    if len(s) == 4 and s.isdigit():
+        return ('ano', s)
+    parte = s.split()[0] if s else ''
+    for fmt in ('%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y', '%Y/%m/%d'):
         try:
-            ultimo_seq = int(row['prontuario_num'].split('-')[-1])
-            proximo_seq = ultimo_seq + 1
+            dt = datetime.datetime.strptime(parte, fmt)
+            return ('data', dt.strftime('%Y%m%d'))
         except ValueError:
-            proximo_seq = 1
-    else:
-        count = db.execute("SELECT COUNT(*) as c FROM pacientes").fetchone()['c']
-        proximo_seq = count + 1
+            continue
+    return None
 
-    return f"{prefixo}{proximo_seq:04d}"
 
-def calcular_idade(data_nasc_str):
-    if not data_nasc_str:
-        return None
-    try:
-        nasc = datetime.datetime.strptime(data_nasc_str, "%Y-%m-%d").date()
-        hoje = datetime.date.today()
-        idade = hoje.year - nasc.year - ((hoje.month, hoje.day) < (nasc.month, nasc.day))
-        return idade
-    except Exception:
-        return None
+def _extrair_operador_do_termo(termo, operador_atual):
+    """Permite digitar operadores como '> 1970' ou '>= 01/01/1970' direto na busca."""
+    if operador_atual != 'contem' or not termo:
+        return operador_atual, termo
+    prefixos = (
+        ('>=', 'maior_igual'),
+        ('<=', 'menor_igual'),
+        ('>', 'maior'),
+        ('<', 'menor'),
+        ('=', 'igual'),
+    )
+    for pref, op in prefixos:
+        if termo.startswith(pref) and len(termo) > len(pref):
+            resto = termo[len(pref):].strip()
+            if resto:
+                return op, resto
+    return operador_atual, termo
 
-@bp.route('/')
-@login_required
-def index():
-    termo = request.args.get('busca', '').strip()
-    status_filtro = request.args.get('status', '').strip()
-    diagnostico_filtro = request.args.get('diagnostico', '').strip()
-    pagina = max(1, int(request.args.get('pagina', 1)))
-    itens_por_pagina = 15
-    offset = (pagina - 1) * itens_por_pagina
 
-    db = get_db()
+def _construir_clausula_order_by(ordem, direcao):
+    dir_sql = 'DESC' if direcao == 'desc' else 'ASC'
+    if ordem not in _CHAVES_PLANILHA:
+        ordem = 'nome'
+
+    vazio_por_ultimo = f"CASE WHEN {ordem} IS NULL OR TRIM({ordem}) = '' THEN 1 ELSE 0 END ASC"
+
+    if ordem == 'prontuario_num':
+        return (
+            f"{vazio_por_ultimo}, "
+            f"CASE WHEN prontuario_num GLOB '[0-9]*' THEN 0 ELSE 1 END ASC, "
+            f"CAST(prontuario_num AS INTEGER) {dir_sql}, "
+            f"prontuario_num COLLATE NOCASE {dir_sql}"
+        )
+    if ordem == 'dn':
+        expr = _sql_expr_data_ordenavel('dn')
+        return f"CASE WHEN ({expr}) = '' THEN 1 ELSE 0 END ASC, ({expr}) {dir_sql}, nome COLLATE NOCASE ASC"
+    if ordem == 'carimbo_data_hora':
+        expr = _sql_expr_carimbo_ordenavel()
+        return f"CASE WHEN ({expr}) = '' THEN 1 ELSE 0 END ASC, ({expr}) {dir_sql}, id {dir_sql}"
+
+    return f"{vazio_por_ultimo}, {ordem} COLLATE NOCASE {dir_sql}, nome COLLATE NOCASE ASC"
+
+
+def _construir_consulta_pacientes(args):
+    """Constrói cláusula WHERE, parâmetros e ORDER BY compartilhados entre listagem e exportação CSV."""
+    termo_original = (args.get('busca') or '').strip()
+    coluna_filtro = (args.get('coluna') or 'todas').strip() or 'todas'
+    if coluna_filtro not in FILTROS_COLUNAS:
+        coluna_filtro = 'todas'
+
+    operador_filtro = (args.get('operador') or 'contem').strip() or 'contem'
+    if operador_filtro not in _OPERADORES_VALIDOS:
+        operador_filtro = 'contem'
+
+    ordem = (args.get('ordem') or 'nome').strip() or 'nome'
+    if ordem not in _CHAVES_PLANILHA:
+        ordem = 'nome'
+
+    direcao = (args.get('dir') or 'asc').strip().lower()
+    if direcao not in ('asc', 'desc'):
+        direcao = 'asc'
 
     query_base = "FROM pacientes WHERE 1=1"
     params = []
 
-    if termo:
-        query_base += " AND (nome LIKE ? OR prontuario_num LIKE ? OR cpf LIKE ? OR diagnostico LIKE ? OR telefone LIKE ?)"
-        like_termo = f"%{termo}%"
-        params.extend([like_termo, like_termo, like_termo, like_termo, like_termo])
+    if termo_original:
+        op_efetivo, termo_efetivo = _extrair_operador_do_termo(termo_original, operador_filtro)
 
-    if status_filtro:
-        query_base += " AND status_instituto = ?"
-        params.append(status_filtro)
+        if op_efetivo == 'contem' or coluna_filtro == 'todas':
+            like_termo = f"%{termo_efetivo}%"
+            apenas_digitos = ''.join(filter(str.isdigit, termo_efetivo))
+            like_cpf_digitos = f"%{apenas_digitos}%" if apenas_digitos else like_termo
 
-    if diagnostico_filtro:
-        query_base += " AND diagnostico LIKE ?"
-        params.append(f"%{diagnostico_filtro}%")
+            query_base += f" AND {FILTROS_COLUNAS[coluna_filtro]}"
+            if coluna_filtro == 'todas':
+                params.extend([like_termo] * len(_CHAVES_PLANILHA) + [like_cpf_digitos])
+            elif coluna_filtro == 'cpf':
+                params.extend([like_termo, like_cpf_digitos])
+            else:
+                params.append(like_termo)
+        else:
+            op_sql = _MAPA_OP_SQL[op_efetivo]
+            if coluna_filtro in _COLUNAS_DATA:
+                parsed = _parse_valor_data_filtro(termo_efetivo)
+                expr_data = _sql_expr_data_ordenavel(coluna_filtro)
+                if parsed:
+                    tipo_val, val_norm = parsed
+                    if tipo_val == 'ano':
+                        if op_efetivo == 'igual':
+                            query_base += f" AND ({expr_data}) BETWEEN ? AND ?"
+                            params.extend([f"{val_norm}0101", f"{val_norm}1231"])
+                        elif op_efetivo == 'maior':
+                            query_base += f" AND ({expr_data}) != '' AND ({expr_data}) > ?"
+                            params.append(f"{val_norm}1231")
+                        elif op_efetivo == 'maior_igual':
+                            query_base += f" AND ({expr_data}) != '' AND ({expr_data}) >= ?"
+                            params.append(f"{val_norm}0101")
+                        elif op_efetivo == 'menor':
+                            query_base += f" AND ({expr_data}) != '' AND ({expr_data}) < ?"
+                            params.append(f"{val_norm}0101")
+                        elif op_efetivo == 'menor_igual':
+                            query_base += f" AND ({expr_data}) != '' AND ({expr_data}) <= ?"
+                            params.append(f"{val_norm}1231")
+                    else:
+                        query_base += f" AND ({expr_data}) != '' AND ({expr_data}) {op_sql} ?"
+                        params.append(val_norm)
+                else:
+                    query_base += f" AND COALESCE({coluna_filtro}, '') COLLATE NOCASE {op_sql} ?"
+                    params.append(termo_efetivo)
+            elif coluna_filtro == 'prontuario_num' and termo_efetivo.isdigit():
+                query_base += f" AND prontuario_num GLOB '[0-9]*' AND CAST(prontuario_num AS INTEGER) {op_sql} ?"
+                params.append(int(termo_efetivo))
+            elif coluna_filtro == 'cpf' and op_efetivo == 'igual':
+                apenas_digitos = ''.join(filter(str.isdigit, termo_efetivo))
+                if apenas_digitos:
+                    query_base += " AND (cpf = ? OR REPLACE(REPLACE(COALESCE(cpf, ''), '.', ''), '-', '') = ?)"
+                    params.extend([termo_efetivo, apenas_digitos])
+                else:
+                    query_base += " AND COALESCE(cpf, '') COLLATE NOCASE = ?"
+                    params.append(termo_efetivo)
+            else:
+                query_base += f" AND COALESCE({coluna_filtro}, '') COLLATE NOCASE {op_sql} ?"
+                params.append(termo_efetivo)
 
-    count_row = db.execute(f"SELECT COUNT(*) as total {query_base}", params).fetchone()
-    total_registros = count_row['total']
-    total_paginas = max(1, (total_registros + itens_por_pagina - 1) // itens_por_pagina)
+    order_by = _construir_clausula_order_by(ordem, direcao)
+
+    return {
+        'termo': termo_original,
+        'coluna_filtro': coluna_filtro,
+        'operador_filtro': operador_filtro,
+        'ordem': ordem,
+        'direcao': direcao,
+        'query_base': query_base,
+        'params': params,
+        'order_by': order_by,
+    }
+
+
+def _normalizar_valor_comparacao(valor):
+    if valor is None:
+        return ''
+    return str(valor).strip()
+
+
+def _formatar_valor_log(valor):
+    if valor is None or str(valor).strip() == '':
+        return '(vazio)'
+    return str(valor).strip()
+
+
+def _descrever_diferencas(registro_antigo, novos_valores, labels_map):
+    mudancas = []
+    chaves_antigo = set(registro_antigo.keys()) if hasattr(registro_antigo, 'keys') else set()
+    for campo, novo_val in novos_valores.items():
+        if campo not in labels_map:
+            continue
+        antigo_val = registro_antigo[campo] if campo in chaves_antigo else None
+        if _normalizar_valor_comparacao(antigo_val) != _normalizar_valor_comparacao(novo_val):
+            label = labels_map[campo]
+            mudancas.append(
+                f"- {label}: '{_formatar_valor_log(antigo_val)}' → '{_formatar_valor_log(novo_val)}'"
+            )
+    return mudancas
+
+
+def gerar_numero_prontuario(db):
+    """Gera o próximo número de prontuário único no formato CV-{ano}-{seq:04d}."""
+    ano_atual = datetime.date.today().year
+    prefixo = f"CV-{ano_atual}-"
+    rows = db.execute(
+        "SELECT prontuario_num FROM pacientes WHERE prontuario_num LIKE ?",
+        (f"{prefixo}%",),
+    ).fetchall()
+
+    maior_seq = 0
+    for row in rows:
+        pront = row['prontuario_num'] or ''
+        sufixo = pront[len(prefixo):]
+        if sufixo.isdigit():
+            maior_seq = max(maior_seq, int(sufixo))
+
+    proximo_seq = maior_seq + 1
+    while True:
+        candidato = f"{prefixo}{proximo_seq:04d}"
+        existe = db.execute(
+            "SELECT 1 FROM pacientes WHERE prontuario_num = ?",
+            (candidato,),
+        ).fetchone()
+        if not existe:
+            return candidato
+        proximo_seq += 1
+
+
+def _registrar_paciente_excluido(db, paciente):
+    agora = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    db.execute(
+        """
+        INSERT INTO pacientes_excluidos (prontuario_num, cpf, nome, excluido_em)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            paciente['prontuario_num'] or None,
+            paciente['cpf'] or None,
+            paciente['nome'] or None,
+            agora,
+        ),
+    )
+
+
+@bp.route('/')
+def index():
+    consulta = _construir_consulta_pacientes(request.args)
+    db = get_db()
 
     query = f"""
-        SELECT id, prontuario_num, nome, data_nascimento, cpf, telefone, whatsapp,
-               diagnostico, local_tratamento, status_tratamento, status_instituto,
-               endereco_bairro, endereco_cidade, atualizado_em
-        {query_base}
-        ORDER BY nome COLLATE NOCASE ASC
-        LIMIT ? OFFSET ?
+        SELECT id, carimbo_data_hora, prontuario_num, nome, endereco, responsavel_1, telefone_1,
+               responsavel_2, telefone_2, telefone_3, dn, identidade, cpf, obs
+        {consulta['query_base']}
+        ORDER BY {consulta['order_by']}
     """
-    params_pag = list(params)
-    params_pag.extend([itens_por_pagina, offset])
-    pacientes = db.execute(query, params_pag).fetchall()
-
-    stats = {
-        'total': db.execute("SELECT COUNT(*) as c FROM pacientes").fetchone()['c'],
-        'ativos': db.execute("SELECT COUNT(*) as c FROM pacientes WHERE status_instituto = 'Ativo'").fetchone()['c'],
-        'espera': db.execute("SELECT COUNT(*) as c FROM pacientes WHERE status_instituto = 'Em Espera'").fetchone()['c'],
-        'atendimentos_mes': db.execute(
-            "SELECT COUNT(*) as c FROM atendimentos WHERE strftime('%Y-%m', data_atendimento) = strftime('%Y-%m', 'now')"
-        ).fetchone()['c']
-    }
+    pacientes = db.execute(query, consulta['params']).fetchall()
+    total_registros = len(pacientes)
 
     return render_template(
         'pacientes/index.html',
         pacientes=pacientes,
-        termo=termo,
-        status_filtro=status_filtro,
-        diagnostico_filtro=diagnostico_filtro,
-        pagina=pagina,
-        total_paginas=total_paginas,
+        colunas_planilha=COLUNAS_PLANILHA,
+        operadores_filtro=OPERADORES_FILTRO,
+        termo=consulta['termo'],
+        coluna_filtro=consulta['coluna_filtro'],
+        operador_filtro=consulta['operador_filtro'],
+        ordem=consulta['ordem'],
+        direcao=consulta['direcao'],
         total_registros=total_registros,
-        stats=stats
     )
 
+
 @bp.route('/novo', methods=('GET', 'POST'))
-@login_required
 def novo():
     db = get_db()
 
     if request.method == 'POST':
-        nome = request.form.get('nome', '').strip()
-        prontuario_num = request.form.get('prontuario_num', '').strip() or gerar_numero_prontuario(db)
-        data_nascimento = request.form.get('data_nascimento', '').strip()
-        cpf = request.form.get('cpf', '').strip()
-        rg = request.form.get('rg', '').strip()
-        sexo = request.form.get('sexo', '').strip()
-        estado_civil = request.form.get('estado_civil', '').strip()
-        telefone = request.form.get('telefone', '').strip()
-        whatsapp = request.form.get('whatsapp', '').strip()
-        email = request.form.get('email', '').strip()
-
-        nome_responsavel = request.form.get('nome_responsavel', '').strip()
-        telefone_responsavel = request.form.get('telefone_responsavel', '').strip()
-        parentesco_responsavel = request.form.get('parentesco_responsavel', '').strip()
-
-        endereco_cep = request.form.get('endereco_cep', '').strip()
-        endereco_logradouro = request.form.get('endereco_logradouro', '').strip()
-        endereco_numero = request.form.get('endereco_numero', '').strip()
-        endereco_complemento = request.form.get('endereco_complemento', '').strip()
-        endereco_bairro = request.form.get('endereco_bairro', '').strip()
-        endereco_cidade = request.form.get('endereco_cidade', '').strip() or 'Juiz de Fora'
-        endereco_uf = request.form.get('endereco_uf', '').strip() or 'MG'
-        endereco_referencia = request.form.get('endereco_referencia', '').strip()
-
-        diagnostico = request.form.get('diagnostico', '').strip()
-        local_tratamento = request.form.get('local_tratamento', '').strip()
-        medico_responsavel = request.form.get('medico_responsavel', '').strip()
-        data_diagnostico = request.form.get('data_diagnostico', '').strip()
-        estadiamento = request.form.get('estadiamento', '').strip()
-        status_tratamento = request.form.get('status_tratamento', 'Em tratamento').strip()
-        medicamentos_em_uso = request.form.get('medicamentos_em_uso', '').strip()
-        
-        necessidades_lista = request.form.getlist('necessidades_apoio')
-        outras_necessidades = request.form.get('outras_necessidades', '').strip()
-        if outras_necessidades:
-            necessidades_lista.append(outras_necessidades)
-        necessidades_apoio = ", ".join(necessidades_lista)
-
-        renda_familiar = request.form.get('renda_familiar', '').strip()
-        beneficio_social = request.form.get('beneficio_social', '').strip()
-        ocupacao = request.form.get('ocupacao', '').strip()
-        try:
-            qtd_moradores = int(request.form.get('qtd_moradores', 1) or 1)
-        except ValueError:
-            qtd_moradores = 1
-
-        status_instituto = request.form.get('status_instituto', 'Ativo').strip()
-        observacoes = request.form.get('observacoes', '').strip()
+        valores_form = {
+            col: request.form.get(col, '').strip()
+            for col in CAMPOS_PLANILHA
+        }
+        nome = valores_form['nome']
+        prontuario_num = valores_form['prontuario_num'] or gerar_numero_prontuario(db)
+        cpf = valores_form['cpf'] or None
+        carimbo_data_hora = datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')
 
         if not nome:
-            flash('O nome do paciente é obrigatório.', 'danger')
+            flash('O nome do assistido é obrigatório.', 'danger')
         else:
             try:
-                cur = db.execute("""
+                db.execute(
+                    """
                     INSERT INTO pacientes (
-                        prontuario_num, nome, data_nascimento, cpf, rg, sexo, estado_civil,
-                        telefone, whatsapp, email,
-                        nome_responsavel, telefone_responsavel, parentesco_responsavel,
-                        endereco_cep, endereco_logradouro, endereco_numero, endereco_complemento,
-                        endereco_bairro, endereco_cidade, endereco_uf, endereco_referencia,
-                        diagnostico, local_tratamento, medico_responsavel, data_diagnostico,
-                        estadiamento, status_tratamento, medicamentos_em_uso, necessidades_apoio,
-                        renda_familiar, beneficio_social, ocupacao, qtd_moradores,
-                        status_instituto, observacoes, criado_por, atualizado_por
-                    ) VALUES (
-                        ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?,
-                        ?, ?, ?,
-                        ?, ?, ?, ?,
-                        ?, ?, ?, ?,
-                        ?, ?, ?, ?,
-                        ?, ?, ?, ?,
-                        ?, ?, ?, ?,
-                        ?, ?, ?, ?
-                    )
-                """, (
-                    prontuario_num, nome, data_nascimento or None, cpf or None, rg, sexo, estado_civil,
-                    telefone, whatsapp, email,
-                    nome_responsavel, telefone_responsavel, parentesco_responsavel,
-                    endereco_cep, endereco_logradouro, endereco_numero, endereco_complemento,
-                    endereco_bairro, endereco_cidade, endereco_uf, endereco_referencia,
-                    diagnostico, local_tratamento, medico_responsavel, data_diagnostico or None,
-                    estadiamento, status_tratamento, medicamentos_em_uso, necessidades_apoio,
-                    renda_familiar, beneficio_social, ocupacao, qtd_moradores,
-                    status_instituto, observacoes, g.user['id'], g.user['id']
-                ))
+                        carimbo_data_hora, prontuario_num, nome, endereco, responsavel_1, telefone_1,
+                        responsavel_2, telefone_2, telefone_3, dn, identidade, cpf, obs
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        carimbo_data_hora,
+                        prontuario_num,
+                        nome,
+                        valores_form['endereco'],
+                        valores_form['responsavel_1'],
+                        valores_form['telefone_1'],
+                        valores_form['responsavel_2'],
+                        valores_form['telefone_2'],
+                        valores_form['telefone_3'],
+                        valores_form['dn'],
+                        valores_form['identidade'],
+                        cpf,
+                        valores_form['obs'],
+                    ),
+                )
                 db.commit()
-                novo_id = cur.lastrowid
-                log_audit('CADASTRO', f"Paciente {nome} cadastrado (ID {novo_id}, Prontuário {prontuario_num})", g.user['id'], g.user['nome_completo'])
-                flash(f'Paciente "{nome}" cadastrado com sucesso!', 'success')
-                return redirect(url_for('pacientes.detalhes', id=novo_id))
+                log_audit(
+                    'CADASTRO',
+                    f"Novo assistido adicionado: {nome} (Prontuário: {prontuario_num}, CPF: {cpf or '-'})",
+                )
+                flash(f'Assistido "{nome}" cadastrado com sucesso!', 'success')
+                return redirect(url_for('pacientes.index'))
             except Exception as e:
                 db.rollback()
-                if "UNIQUE constraint failed: pacientes.cpf" in str(e):
-                    flash('Já existe um paciente cadastrado com este CPF.', 'danger')
-                elif "UNIQUE constraint failed: pacientes.prontuario_num" in str(e):
-                    flash('Já existe um paciente cadastrado com este número de prontuário.', 'danger')
+                erro_str = str(e)
+                if "UNIQUE constraint failed: pacientes.cpf" in erro_str:
+                    flash('Já existe um assistido cadastrado com este CPF.', 'danger')
+                elif "UNIQUE constraint failed: pacientes.prontuario_num" in erro_str:
+                    flash('Já existe um assistido cadastrado com este número de prontuário.', 'danger')
                 else:
-                    flash(f'Erro ao cadastrar paciente: {e}', 'danger')
+                    flash(f'Erro ao cadastrar assistido: {e}', 'danger')
 
     prontuario_sugerido = gerar_numero_prontuario(db)
-    return render_template('pacientes/novo.html', prontuario_sugerido=prontuario_sugerido)
-
-@bp.route('/<int:id>')
-@login_required
-def detalhes(id):
-    db = get_db()
-    paciente = db.execute("SELECT * FROM pacientes WHERE id = ?", (id,)).fetchone()
-    if not paciente:
-        flash('Paciente não encontrado.', 'warning')
-        return redirect(url_for('pacientes.index'))
-
-    atendimentos = db.execute("""
-        SELECT a.*, u.nome_completo AS usuario_nome
-        FROM atendimentos a
-        LEFT JOIN usuarios u ON a.usuario_id = u.id
-        WHERE a.paciente_id = ?
-        ORDER BY a.data_atendimento DESC, a.id DESC
-    """, (id,)).fetchall()
-
-    idade = calcular_idade(paciente['data_nascimento'])
-
     return render_template(
-        'pacientes/detalhes.html',
-        paciente=paciente,
-        atendimentos=atendimentos,
-        idade=idade,
-        hoje=datetime.date.today().strftime('%Y-%m-%d')
+        'pacientes/novo.html',
+        prontuario_sugerido=prontuario_sugerido,
+        campos_planilha=CAMPOS_PLANILHA,
+        dados=request.form if request.method == 'POST' else {},
     )
 
-@bp.route('/<int:id>/editar', methods=('GET', 'POST'))
-@login_required
-def editar(id):
-    db = get_db()
-    paciente = db.execute("SELECT * FROM pacientes WHERE id = ?", (id,)).fetchone()
-    if not paciente:
-        flash('Paciente não encontrado.', 'warning')
-        return redirect(url_for('pacientes.index'))
 
-    if request.method == 'POST':
-        nome = request.form.get('nome', '').strip()
-        prontuario_num = request.form.get('prontuario_num', '').strip()
-        data_nascimento = request.form.get('data_nascimento', '').strip()
-        cpf = request.form.get('cpf', '').strip()
-        rg = request.form.get('rg', '').strip()
-        sexo = request.form.get('sexo', '').strip()
-        estado_civil = request.form.get('estado_civil', '').strip()
-        telefone = request.form.get('telefone', '').strip()
-        whatsapp = request.form.get('whatsapp', '').strip()
-        email = request.form.get('email', '').strip()
+@bp.route('/editar-lote', methods=('POST',))
+def editar_lote():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'ok': False, 'erro': 'Payload JSON inválido.'}), 400
 
-        nome_responsavel = request.form.get('nome_responsavel', '').strip()
-        telefone_responsavel = request.form.get('telefone_responsavel', '').strip()
-        parentesco_responsavel = request.form.get('parentesco_responsavel', '').strip()
+    alteracoes = payload.get('alteracoes')
+    exclusoes = payload.get('exclusoes')
+    if alteracoes is None:
+        alteracoes = []
+    if exclusoes is None:
+        exclusoes = []
 
-        endereco_cep = request.form.get('endereco_cep', '').strip()
-        endereco_logradouro = request.form.get('endereco_logradouro', '').strip()
-        endereco_numero = request.form.get('endereco_numero', '').strip()
-        endereco_complemento = request.form.get('endereco_complemento', '').strip()
-        endereco_bairro = request.form.get('endereco_bairro', '').strip()
-        endereco_cidade = request.form.get('endereco_cidade', '').strip() or 'Juiz de Fora'
-        endereco_uf = request.form.get('endereco_uf', '').strip() or 'MG'
-        endereco_referencia = request.form.get('endereco_referencia', '').strip()
+    if not isinstance(alteracoes, list) or not isinstance(exclusoes, list):
+        return jsonify({'ok': False, 'erro': 'Formato inválido para alterações ou exclusões.'}), 400
 
-        diagnostico = request.form.get('diagnostico', '').strip()
-        local_tratamento = request.form.get('local_tratamento', '').strip()
-        medico_responsavel = request.form.get('medico_responsavel', '').strip()
-        data_diagnostico = request.form.get('data_diagnostico', '').strip()
-        estadiamento = request.form.get('estadiamento', '').strip()
-        status_tratamento = request.form.get('status_tratamento', '').strip()
-        medicamentos_em_uso = request.form.get('medicamentos_em_uso', '').strip()
+    if not alteracoes and not exclusoes:
+        return jsonify({'ok': False, 'erro': 'Nenhuma alteração enviada.'}), 400
 
-        necessidades_lista = request.form.getlist('necessidades_apoio')
-        outras_necessidades = request.form.get('outras_necessidades', '').strip()
-        if outras_necessidades:
-            necessidades_lista.append(outras_necessidades)
-        necessidades_apoio = ", ".join(necessidades_lista)
-
-        renda_familiar = request.form.get('renda_familiar', '').strip()
-        beneficio_social = request.form.get('beneficio_social', '').strip()
-        ocupacao = request.form.get('ocupacao', '').strip()
+    exclusoes_ids = []
+    exclusoes_set = set()
+    motivos_exclusao = {}
+    for raw_id in exclusoes:
         try:
-            qtd_moradores = int(request.form.get('qtd_moradores', 1) or 1)
-        except ValueError:
-            qtd_moradores = 1
+            del_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if del_id not in exclusoes_set:
+            exclusoes_set.add(del_id)
+            exclusoes_ids.append(del_id)
+            motivos_exclusao[del_id] = 'exclusao_direta'
 
-        status_instituto = request.form.get('status_instituto', 'Ativo').strip()
-        observacoes = request.form.get('observacoes', '').strip()
+    for item in alteracoes:
+        if not isinstance(item, dict):
+            continue
+        try:
+            pid = int(item.get('id'))
+        except (TypeError, ValueError):
+            continue
+        campos_brutos = item.get('campos') or {}
+        if not isinstance(campos_brutos, dict):
+            continue
+        if 'prontuario_num' in campos_brutos:
+            pront_val = campos_brutos.get('prontuario_num')
+            pront_str = '' if pront_val is None else str(pront_val).strip()
+            if pront_str == '':
+                if pid not in exclusoes_set:
+                    exclusoes_set.add(pid)
+                    exclusoes_ids.append(pid)
+                motivos_exclusao[pid] = 'prontuario_apagado'
 
-        if not nome:
-            flash('O nome do paciente é obrigatório.', 'danger')
-        else:
+    db = get_db()
+    resumos_edicao = []
+    resumos_exclusao = []
+
+    try:
+        for item in alteracoes:
+            if not isinstance(item, dict):
+                continue
             try:
-                db.execute("""
-                    UPDATE pacientes SET
-                        prontuario_num = ?, nome = ?, data_nascimento = ?, cpf = ?, rg = ?, sexo = ?, estado_civil = ?,
-                        telefone = ?, whatsapp = ?, email = ?,
-                        nome_responsavel = ?, telefone_responsavel = ?, parentesco_responsavel = ?,
-                        endereco_cep = ?, endereco_logradouro = ?, endereco_numero = ?, endereco_complemento = ?,
-                        endereco_bairro = ?, endereco_cidade = ?, endereco_uf = ?, endereco_referencia = ?,
-                        diagnostico = ?, local_tratamento = ?, medico_responsavel = ?, data_diagnostico = ?,
-                        estadiamento = ?, status_tratamento = ?, medicamentos_em_uso = ?, necessidades_apoio = ?,
-                        renda_familiar = ?, beneficio_social = ?, ocupacao = ?, qtd_moradores = ?,
-                        status_instituto = ?, observacoes = ?,
-                        atualizado_em = CURRENT_TIMESTAMP, atualizado_por = ?
-                    WHERE id = ?
-                """, (
-                    prontuario_num or None, nome, data_nascimento or None, cpf or None, rg, sexo, estado_civil,
-                    telefone, whatsapp, email,
-                    nome_responsavel, telefone_responsavel, parentesco_responsavel,
-                    endereco_cep, endereco_logradouro, endereco_numero, endereco_complemento,
-                    endereco_bairro, endereco_cidade, endereco_uf, endereco_referencia,
-                    diagnostico, local_tratamento, medico_responsavel, data_diagnostico or None,
-                    estadiamento, status_tratamento, medicamentos_em_uso, necessidades_apoio,
-                    renda_familiar, beneficio_social, ocupacao, qtd_moradores,
-                    status_instituto, observacoes, g.user['id'], id
+                pid = int(item.get('id'))
+            except (TypeError, ValueError):
+                continue
+
+            if pid in exclusoes_set:
+                continue
+
+            paciente = db.execute("SELECT * FROM pacientes WHERE id = ?", (pid,)).fetchone()
+            if not paciente:
+                continue
+
+            campos_brutos = item.get('campos') or {}
+            if not isinstance(campos_brutos, dict):
+                continue
+
+            campos_normalizados = {}
+            for col, val in campos_brutos.items():
+                if col not in CAMPOS_PLANILHA:
+                    continue
+                val_str = '' if val is None else str(val).strip()
+                if col == 'nome' and not val_str:
+                    db.rollback()
+                    return jsonify({'ok': False, 'erro': 'O nome do assistido não pode ficar vazio.'}), 400
+                if col == 'cpf':
+                    campos_normalizados[col] = val_str or None
+                else:
+                    campos_normalizados[col] = val_str
+
+            campos_alterados = {}
+            for col, novo_val in campos_normalizados.items():
+                if _normalizar_valor_comparacao(paciente[col]) != _normalizar_valor_comparacao(novo_val):
+                    campos_alterados[col] = novo_val
+
+            if not campos_alterados:
+                continue
+
+            mudancas = _descrever_diferencas(paciente, campos_alterados, CAMPOS_PLANILHA)
+            set_clauses = [f"{col} = ?" for col in campos_alterados]
+            set_clauses.append("atualizado_em = CURRENT_TIMESTAMP")
+            valores = list(campos_alterados.values()) + [pid]
+
+            db.execute(
+                f"UPDATE pacientes SET {', '.join(set_clauses)} WHERE id = ?",
+                valores,
+            )
+
+            nome_final = campos_alterados.get('nome', paciente['nome'])
+            pront_final = (
+                campos_alterados['prontuario_num']
+                if 'prontuario_num' in campos_alterados
+                else paciente['prontuario_num']
+            )
+            resumos_edicao.append((nome_final, pront_final or '-', mudancas))
+
+        for del_id in exclusoes_ids:
+            paciente = db.execute(
+                "SELECT id, nome, prontuario_num, cpf FROM pacientes WHERE id = ?",
+                (del_id,),
+            ).fetchone()
+            if paciente:
+                _registrar_paciente_excluido(db, paciente)
+                db.execute("DELETE FROM pacientes WHERE id = ?", (del_id,))
+                resumos_exclusao.append((
+                    del_id,
+                    paciente['nome'],
+                    paciente['prontuario_num'] or '-',
+                    paciente['cpf'] or '-',
+                    motivos_exclusao.get(del_id, 'exclusao_direta'),
                 ))
-                db.commit()
-                log_audit('EDICAO', f"Paciente {nome} (ID {id}) atualizado", g.user['id'], g.user['nome_completo'])
-                flash('Cadastro do paciente atualizado com sucesso!', 'success')
-                return redirect(url_for('pacientes.detalhes', id=id))
-            except Exception as e:
-                db.rollback()
-                flash(f'Erro ao atualizar registro: {e}', 'danger')
 
-    return render_template('pacientes/editar.html', paciente=paciente)
-
-@bp.route('/<int:id>/atendimento/novo', methods=('POST',))
-@login_required
-def novo_atendimento(id):
-    db = get_db()
-    paciente = db.execute("SELECT id, nome FROM pacientes WHERE id = ?", (id,)).fetchone()
-    if not paciente:
-        flash('Paciente não encontrado.', 'danger')
-        return redirect(url_for('pacientes.index'))
-
-    data_atendimento = request.form.get('data_atendimento', '').strip() or datetime.date.today().strftime('%Y-%m-%d')
-    tipo = request.form.get('tipo', 'Atendimento Geral').strip()
-    descricao = request.form.get('descricao', '').strip()
-    profissional = request.form.get('profissional', '').strip() or g.user['nome_completo']
-
-    if not descricao:
-        flash('Descreva o atendimento ou benefício entregue.', 'warning')
-        return redirect(url_for('pacientes.detalhes', id=id))
-
-    db.execute("""
-        INSERT INTO atendimentos (paciente_id, data_atendimento, tipo, descricao, profissional, usuario_id)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (id, data_atendimento, tipo, descricao, profissional, g.user['id']))
-    db.commit()
-
-    log_audit('ATENDIMENTO', f"Atendimento ({tipo}) registrado para o paciente {paciente['nome']}", g.user['id'], g.user['nome_completo'])
-    flash('Atendimento registrado com sucesso!', 'success')
-    return redirect(url_for('pacientes.detalhes', id=id))
-
-@bp.route('/<int:id>/excluir', methods=('POST',))
-@admin_required
-def excluir(id):
-    db = get_db()
-    paciente = db.execute("SELECT id, nome FROM pacientes WHERE id = ?", (id,)).fetchone()
-    if paciente:
-        db.execute("DELETE FROM pacientes WHERE id = ?", (id,))
         db.commit()
-        log_audit('EXCLUSAO', f"Paciente {paciente['nome']} (ID {id}) removido", g.user['id'], g.user['nome_completo'])
-        flash(f'Registro de "{paciente["nome"]}" foi excluído com sucesso.', 'info')
-    return redirect(url_for('pacientes.index'))
+    except Exception as e:
+        db.rollback()
+        erro_str = str(e)
+        if "UNIQUE constraint failed: pacientes.cpf" in erro_str:
+            return jsonify({'ok': False, 'erro': 'Já existe outro assistido cadastrado com este CPF.'}), 400
+        if "UNIQUE constraint failed: pacientes.prontuario_num" in erro_str:
+            return jsonify({'ok': False, 'erro': 'Já existe outro assistido cadastrado com este número de prontuário.'}), 400
+        return jsonify({'ok': False, 'erro': f'Erro ao salvar alterações na planilha: {e}'}), 400
+
+    for nome_final, pront_final, mudancas in resumos_edicao:
+        log_audit(
+            'EDICAO_PLANILHA',
+            f"Edição direta na planilha — {nome_final} (Prontuário: {pront_final}):\n" + "\n".join(mudancas),
+        )
+
+    for del_id, nome_ex, pront_ex, cpf_ex, motivo in resumos_exclusao:
+        if motivo == 'prontuario_apagado':
+            detalhes_exclusao = (
+                f"Registro removido ao apagar o prontuário na planilha — {nome_ex} "
+                f"(Prontuário anterior: {pront_ex}, CPF: {cpf_ex}, ID: {del_id})"
+            )
+        else:
+            detalhes_exclusao = (
+                f"Remoção via edição da planilha — {nome_ex} "
+                f"(Prontuário: {pront_ex}, CPF: {cpf_ex}, ID: {del_id})"
+            )
+        log_audit('EXCLUSAO', detalhes_exclusao)
+
+    partes = []
+    if resumos_edicao:
+        n_ed = len(resumos_edicao)
+        partes.append(f"{n_ed} {'assistido atualizado' if n_ed == 1 else 'assistidos atualizados'}")
+    if resumos_exclusao:
+        n_ex = len(resumos_exclusao)
+        partes.append(f"{n_ex} {'assistido excluído' if n_ex == 1 else 'assistidos excluídos'}")
+
+    mensagem_resumo = (
+        "Alterações salvas com sucesso: " + " e ".join(partes) + "."
+        if partes
+        else "Nenhuma alteração efetiva foi necessária."
+    )
+
+    return jsonify({
+        'ok': True,
+        'atualizados': len(resumos_edicao),
+        'excluidos': len(resumos_exclusao),
+        'mensagem': mensagem_resumo,
+    }), 200
+
 
 @bp.route('/exportar')
-@login_required
 def exportar_csv():
     db = get_db()
-    pacientes = db.execute("""
-        SELECT prontuario_num, nome, data_nascimento, cpf, rg, sexo, estado_civil,
-               telefone, whatsapp, email, nome_responsavel, telefone_responsavel, parentesco_responsavel,
-               endereco_cep, endereco_logradouro, endereco_numero, endereco_complemento,
-               endereco_bairro, endereco_cidade, endereco_uf,
-               diagnostico, local_tratamento, medico_responsavel, data_diagnostico, estadiamento,
-               status_tratamento, medicamentos_em_uso, necessidades_apoio,
-               renda_familiar, beneficio_social, ocupacao, qtd_moradores,
-               status_instituto, observacoes, criado_em, atualizado_em
-        FROM pacientes
-        ORDER BY nome COLLATE NOCASE ASC
-    """).fetchall()
+    consulta = _construir_consulta_pacientes(request.args)
+
+    ordem_colunas_param = (request.args.get('ordem_colunas') or '').strip()
+    colunas_export = []
+    if ordem_colunas_param:
+        vistas = set()
+        for raw_col in ordem_colunas_param.split(','):
+            col_key = raw_col.strip()
+            if col_key in _LABELS_POR_COLUNA and col_key not in vistas:
+                colunas_export.append((col_key, _LABELS_POR_COLUNA[col_key]))
+                vistas.add(col_key)
+    if not colunas_export:
+        colunas_export = list(COLUNAS_EXPORTACAO)
+
+    colunas_sql = ", ".join(col for col, _ in colunas_export)
+    pacientes = db.execute(
+        f"""
+        SELECT {colunas_sql}
+        {consulta['query_base']}
+        ORDER BY {consulta['order_by']}
+        """,
+        consulta['params'],
+    ).fetchall()
 
     output = io.StringIO()
-    output.write('\ufeff')
     writer = csv.writer(output, delimiter=';')
 
-    colunas = [
-        'Prontuário', 'Nome Completo', 'Data de Nascimento', 'CPF', 'RG', 'Sexo', 'Estado Civil',
-        'Telefone', 'WhatsApp', 'E-mail', 'Responsável/Acompanhante', 'Tel. Responsável', 'Parentesco',
-        'CEP', 'Logradouro', 'Número', 'Complemento', 'Bairro', 'Cidade', 'UF',
-        'Diagnóstico Oncológico', 'Hospital/Local Tratamento', 'Médico Responsável', 'Data Diagnóstico', 'Estadiamento',
-        'Status do Tratamento', 'Medicamentos em Uso', 'Necessidades de Apoio',
-        'Renda Familiar', 'Benefício Social', 'Ocupação', 'Qtd Moradores',
-        'Status no Instituto', 'Observações', 'Data de Cadastro', 'Última Atualização'
-    ]
-    writer.writerow(colunas)
+    writer.writerow([label for _, label in colunas_export])
 
     for p in pacientes:
-        writer.writerow([
-            p['prontuario_num'] or '',
-            p['nome'] or '',
-            p['data_nascimento'] or '',
-            p['cpf'] or '',
-            p['rg'] or '',
-            p['sexo'] or '',
-            p['estado_civil'] or '',
-            p['telefone'] or '',
-            p['whatsapp'] or '',
-            p['email'] or '',
-            p['nome_responsavel'] or '',
-            p['telefone_responsavel'] or '',
-            p['parentesco_responsavel'] or '',
-            p['endereco_cep'] or '',
-            p['endereco_logradouro'] or '',
-            p['endereco_numero'] or '',
-            p['endereco_complemento'] or '',
-            p['endereco_bairro'] or '',
-            p['endereco_cidade'] or '',
-            p['endereco_uf'] or '',
-            p['diagnostico'] or '',
-            p['local_tratamento'] or '',
-            p['medico_responsavel'] or '',
-            p['data_diagnostico'] or '',
-            p['estadiamento'] or '',
-            p['status_tratamento'] or '',
-            p['medicamentos_em_uso'] or '',
-            p['necessidades_apoio'] or '',
-            p['renda_familiar'] or '',
-            p['beneficio_social'] or '',
-            p['ocupacao'] or '',
-            p['qtd_moradores'] or 1,
-            p['status_instituto'] or '',
-            (p['observacoes'] or '').replace('\n', ' '),
-            p['criado_em'] or '',
-            p['atualizado_em'] or ''
-        ])
+        linha = []
+        for col, _ in colunas_export:
+            valor = p[col] or ''
+            if col == 'obs':
+                valor = str(valor).replace('\r\n', ' ').replace('\n', ' ')
+            linha.append(valor)
+        writer.writerow(linha)
 
     data_str = datetime.date.today().strftime('%Y%m%d')
-    nome_arquivo = f"assistidos_casa_vida_{data_str}.csv"
-    
-    log_audit('EXPORTACAO', f"Exportação completa de {len(pacientes)} assistidos para CSV", g.user['id'], g.user['nome_completo'])
+    sufixo_filtro = "_filtrado" if consulta['termo'] else ""
+    nome_arquivo = f"assistidos_casa_vida_{data_str}{sufixo_filtro}.csv"
+
+    if consulta['termo']:
+        log_audit(
+            'EXPORTACAO',
+            f"Exportação filtrada de {len(pacientes)} assistido(s) para CSV "
+            f"(coluna: {consulta['coluna_filtro']}, operador: {consulta['operador_filtro']}, busca: '{consulta['termo']}')"
+        )
+    else:
+        log_audit('EXPORTACAO', f"Exportação completa de {len(pacientes)} assistidos para CSV")
 
     return Response(
         output.getvalue().encode('utf-8-sig'),
         mimetype="text/csv",
-        headers={"Content-disposition": f"attachment; filename={nome_arquivo}"}
+        headers={"Content-disposition": f"attachment; filename={nome_arquivo}"},
     )
 
+
 @bp.route('/importar', methods=('GET', 'POST'))
-@login_required
 def importar():
     if request.method == 'POST':
         arquivo = request.files.get('arquivo_csv')
@@ -481,119 +672,37 @@ def importar():
             except UnicodeDecodeError:
                 texto = bytes_conteudo.decode('latin-1')
 
-            primeira_linha = texto.splitlines()[0] if texto.splitlines() else ''
-            delimitador = ';' if primeira_linha.count(';') > primeira_linha.count(',') else ','
-
-            leitor = csv.DictReader(io.StringIO(texto), delimiter=delimitador)
-            
-            mapeamento = {}
-            for col in (leitor.fieldnames or []):
-                col_limpa = col.strip().lower()
-                if 'nome' in col_limpa and not any(k in col_limpa for k in ['mãe', 'mae', 'resp', 'cuidador']):
-                    mapeamento['nome'] = col
-                elif 'cpf' in col_limpa:
-                    mapeamento['cpf'] = col
-                elif 'nasc' in col_limpa or 'anivers' in col_limpa:
-                    mapeamento['data_nascimento'] = col
-                elif 'tel' in col_limpa or 'contato' in col_limpa or 'cel' in col_limpa:
-                    if 'zap' in col_limpa or 'whats' in col_limpa:
-                        mapeamento['whatsapp'] = col
-                    elif 'telefone' not in mapeamento:
-                        mapeamento['telefone'] = col
-                elif 'cidade' in col_limpa or 'municipio' in col_limpa:
-                    mapeamento['endereco_cidade'] = col
-                elif 'bairro' in col_limpa:
-                    mapeamento['endereco_bairro'] = col
-                elif 'diag' in col_limpa or 'câncer' in col_limpa or 'cancer' in col_limpa or 'patologia' in col_limpa or col_limpa == 'cid' or 'cid-' in col_limpa or 'cid ' in col_limpa:
-                    mapeamento['diagnostico'] = col
-                elif 'hospital' in col_limpa or 'local' in col_limpa or ('tratamento' in col_limpa and 'status' not in col_limpa):
-                    mapeamento['local_tratamento'] = col
-                elif 'endere' in col_limpa or 'rua' in col_limpa or 'logradouro' in col_limpa:
-                    mapeamento['endereco_logradouro'] = col
-                elif 'status' in col_limpa:
-                    mapeamento['status_instituto'] = col
-                elif 'obs' in col_limpa:
-                    mapeamento['observacoes'] = col
-                elif 'pront' in col_limpa or 'registro' in col_limpa:
-                    mapeamento['prontuario_num'] = col
-                elif 'resp' in col_limpa or 'cuidador' in col_limpa or 'acompanhante' in col_limpa:
-                    mapeamento['nome_responsavel'] = col
-                elif 'necess' in col_limpa or 'apoio' in col_limpa or 'benef' in col_limpa:
-                    mapeamento['necessidades_apoio'] = col
-
-            if 'nome' not in mapeamento:
-                flash('Não foi possível identificar a coluna de "Nome" no arquivo CSV. Verifique o cabeçalho da planilha.', 'danger')
+            resultado = sincronizar_csv_no_banco(get_db(), texto, data_corte=None)
+            if not resultado.get('ok'):
+                flash(resultado.get('erro', 'Erro ao importar arquivo CSV.'), 'danger')
                 return redirect(url_for('pacientes.importar'))
 
-            db = get_db()
-            sucessos = 0
-            duplicados = 0
-            erros = 0
-
-            for linha in leitor:
-                nome_val = (linha.get(mapeamento.get('nome', '')) or '').strip()
-                if not nome_val:
-                    continue
-
-                cpf_val = (linha.get(mapeamento.get('cpf', '')) or '').strip() or None
-                if cpf_val:
-                    cpf_limpo = ''.join(filter(str.isdigit, cpf_val))
-                    if len(cpf_limpo) == 11:
-                        cpf_val = f"{cpf_limpo[:3]}.{cpf_limpo[3:6]}.{cpf_limpo[6:9]}-{cpf_limpo[9:]}"
-
-                existente = None
-                if cpf_val:
-                    existente = db.execute("SELECT id FROM pacientes WHERE cpf = ?", (cpf_val,)).fetchone()
-                if not existente:
-                    existente = db.execute("SELECT id FROM pacientes WHERE nome = ? COLLATE NOCASE", (nome_val,)).fetchone()
-
-                if existente:
-                    duplicados += 1
-                    continue
-
-                prontuario_val = (linha.get(mapeamento.get('prontuario_num', '')) or '').strip() or gerar_numero_prontuario(db)
-                data_nasc_val = (linha.get(mapeamento.get('data_nascimento', '')) or '').strip() or None
-                if data_nasc_val and '/' in data_nasc_val:
-                    partes = data_nasc_val.split('/')
-                    if len(partes) == 3:
-                        data_nasc_val = f"{partes[2]}-{partes[1].zfill(2)}-{partes[0].zfill(2)}"
-
-                telefone_val = (linha.get(mapeamento.get('telefone', '')) or '').strip()
-                whatsapp_val = (linha.get(mapeamento.get('whatsapp', '')) or '').strip()
-                diagnostico_val = (linha.get(mapeamento.get('diagnostico', '')) or '').strip()
-                local_tratamento_val = (linha.get(mapeamento.get('local_tratamento', '')) or '').strip()
-                endereco_bairro_val = (linha.get(mapeamento.get('endereco_bairro', '')) or '').strip()
-                endereco_cidade_val = (linha.get(mapeamento.get('endereco_cidade', '')) or '').strip() or 'Juiz de Fora'
-                endereco_logradouro_val = (linha.get(mapeamento.get('endereco_logradouro', '')) or '').strip()
-                status_inst_val = (linha.get(mapeamento.get('status_instituto', '')) or '').strip() or 'Ativo'
-                nome_resp_val = (linha.get(mapeamento.get('nome_responsavel', '')) or '').strip()
-                necessidades_val = (linha.get(mapeamento.get('necessidades_apoio', '')) or '').strip()
-                observacoes_val = (linha.get(mapeamento.get('observacoes', '')) or '').strip()
-
-                try:
-                    db.execute("""
-                        INSERT INTO pacientes (
-                            prontuario_num, nome, data_nascimento, cpf, telefone, whatsapp,
-                            diagnostico, local_tratamento, endereco_bairro, endereco_cidade,
-                            endereco_logradouro, status_instituto, nome_responsavel,
-                            necessidades_apoio, observacoes, criado_por, atualizado_por
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        prontuario_val, nome_val, data_nasc_val, cpf_val, telefone_val, whatsapp_val,
-                        diagnostico_val, local_tratamento_val, endereco_bairro_val, endereco_cidade_val,
-                        endereco_logradouro_val, status_inst_val, nome_resp_val,
-                        necessidades_val, observacoes_val, g.user['id'], g.user['id']
-                    ))
-                    sucessos += 1
-                except Exception:
-                    erros += 1
-
-            db.commit()
-            log_audit('IMPORTACAO', f"Planilha importada: {sucessos} novos pacientes, {duplicados} já existentes ignorados, {erros} erros.", g.user['id'], g.user['nome_completo'])
-            flash(f"Importação concluída! {sucessos} pacientes adicionados com sucesso, {duplicados} já existentes ignorados.", "success")
+            log_audit('IMPORTACAO', resultado['mensagem'])
+            flash(resultado['mensagem'], 'success')
             return redirect(url_for('pacientes.index'))
 
         except Exception as e:
             flash(f"Erro ao processar o arquivo CSV: {e}", "danger")
 
     return render_template('pacientes/importar.html')
+
+
+@bp.route('/sincronizar-sheets', methods=('POST',))
+def sincronizar_sheets():
+    resultado = sincronizar_google_sheets(get_db(), current_app.config)
+
+    if resultado.get('ok'):
+        log_audit('SINCRONIZACAO_SHEETS', resultado['mensagem'])
+
+    espera_json = (
+        request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+        or 'application/json' in request.headers.get('Accept', '')
+    )
+    if espera_json:
+        return jsonify(resultado), (200 if resultado.get('ok') else 400)
+
+    if resultado.get('ok'):
+        flash(resultado['mensagem'], 'success')
+    else:
+        flash(resultado['erro'], 'danger')
+    return redirect(url_for('pacientes.index'))
