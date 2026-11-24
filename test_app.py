@@ -322,11 +322,16 @@ class TestCasaVida(unittest.TestCase):
         self.assertIn('Maria Oliveira Santos', html_dn)
         self.assertNotIn('João da Silva Teste', html_dn)
 
-        # Mesmo filtro digitado direto na busca ('> 1970')
+        # Mesmo filtro digitado direto na busca ('> 1970') e combinando dropdown + prefixo ('< 1980' com operador 'menor')
         r_dn_inline = self.client.get('/', query_string={'busca': '> 1970', 'coluna': 'dn'})
         html_dn_inline = r_dn_inline.get_data(as_text=True)
         self.assertIn('Maria Oliveira Santos', html_dn_inline)
         self.assertNotIn('João da Silva Teste', html_dn_inline)
+
+        r_dn_menor_dup = self.client.get('/', query_string={'busca': '< 1980', 'coluna': 'dn', 'operador': 'menor'})
+        html_dn_menor_dup = r_dn_menor_dup.get_data(as_text=True)
+        self.assertIn('João da Silva Teste', html_dn_menor_dup)
+        self.assertNotIn('Maria Oliveira Santos', html_dn_menor_dup)
 
         # Exportação CSV sincronizada com o filtro DN > 1970 + ordenação + ordem_colunas customizada
         r_csv_filtrado = self.client.get('/exportar', query_string={
@@ -405,6 +410,33 @@ class TestCasaVida(unittest.TestCase):
         html_logs = r_logs.get_data(as_text=True)
         self.assertIn('Maria Oliveira Atualizada', html_logs)
         self.assertIn('Av Rio Branco, 777', html_logs)
+
+        # POST /<id>/editar SEM nenhuma mudança NÃO deve atualizar nem criar novo log
+        with self.app.app_context():
+            db = get_db()
+            logs_antes = db.execute("SELECT COUNT(*) FROM logs_auditoria").fetchone()[0]
+
+        r_noop = self.client.post(f'/{pid}/editar', data={
+            'prontuario_num': '2002',
+            'nome': 'Maria Oliveira Atualizada',
+            'endereco': 'Av Rio Branco, 777',
+            'responsavel_1': 'Pedro Santos',
+            'telefone_1': '99111-2222',
+            'responsavel_2': 'Ana Santos',
+            'telefone_2': '99333-4444',
+            'telefone_3': '3200-1111',
+            'dn': '20/09/1982',
+            'identidade': 'MG-99.888.777',
+            'cpf': '987.654.321-11',
+            'obs': 'Atualizada pela tela individual',
+        }, follow_redirects=True)
+        self.assertEqual(r_noop.status_code, 200)
+        self.assertIn('Nenhuma alteração foi feita.', r_noop.get_data(as_text=True))
+
+        with self.app.app_context():
+            db = get_db()
+            logs_depois = db.execute("SELECT COUNT(*) FROM logs_auditoria").fetchone()[0]
+            self.assertEqual(logs_antes, logs_depois)
 
         # POST /<id>/excluir remove, registra em pacientes_excluidos e grava log EXCLUSAO
         r_del = self.client.post(f'/{pid}/excluir', follow_redirects=True)

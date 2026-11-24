@@ -30,6 +30,33 @@ def _collate_ptbr(a, b):
     return 0
 
 
+def _normalizar_data_sql(valor):
+    """Converte datas flexíveis (D/M/YYYY, DD/MM/YYYY, YYYY-MM-DD, com ou sem hora) em YYYYMMDD."""
+    if not valor:
+        return ''
+    texto = str(valor).strip()
+    if not texto:
+        return ''
+    parte = texto.split()[0]
+    if 'T' in parte:
+        parte = parte.split('T')[0]
+    if '/' in parte:
+        partes = parte.split('/')
+        if len(partes) == 3 and all(p.isdigit() for p in partes):
+            if len(partes[2]) == 4:
+                return f"{partes[2]}{partes[1].zfill(2)}{partes[0].zfill(2)}"
+            if len(partes[0]) == 4:
+                return f"{partes[0]}{partes[1].zfill(2)}{partes[2].zfill(2)}"
+    elif '-' in parte:
+        partes = parte.split('-')
+        if len(partes) == 3 and all(p.isdigit() for p in partes):
+            if len(partes[0]) == 4:
+                return f"{partes[0]}{partes[1].zfill(2)}{partes[2].zfill(2)}"
+            if len(partes[2]) == 4:
+                return f"{partes[2]}{partes[1].zfill(2)}{partes[0].zfill(2)}"
+    return ''
+
+
 def get_db():
     if 'db' not in g:
         db_path = current_app.config.get('DATABASE') or config.DATABASE_PATH
@@ -39,6 +66,7 @@ def get_db():
         )
         g.db.row_factory = sqlite3.Row
         g.db.create_collation('PT_BR', _collate_ptbr)
+        g.db.create_function('NORMALIZA_DATA', 1, _normalizar_data_sql)
         g.db.execute('PRAGMA foreign_keys = ON;')
         g.db.execute('PRAGMA journal_mode = WAL;')
         g.db.execute('PRAGMA synchronous = NORMAL;')

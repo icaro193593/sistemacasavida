@@ -71,23 +71,17 @@ COLUNAS_EXPORTACAO = [
 
 
 def _sql_expr_data_ordenavel(col):
-    """Converte DD/MM/YYYY ou YYYY-MM-DD em YYYYMMDD para comparação/ordenação no SQLite."""
-    return (
-        f"CASE "
-        f"WHEN {col} LIKE '__/__/____%' THEN substr({col}, 7, 4) || substr({col}, 4, 2) || substr({col}, 1, 2) "
-        f"WHEN {col} LIKE '____-__-__%' THEN substr({col}, 1, 4) || substr({col}, 6, 2) || substr({col}, 9, 2) "
-        f"ELSE '' END"
-    )
+    """Converte qualquer formato de data (D/M/YYYY, DD/MM/YYYY, YYYY-MM-DD) em YYYYMMDD no SQLite."""
+    return f"NORMALIZA_DATA({col})"
 
 
 def _sql_expr_carimbo_ordenavel():
-    """Converte DD/MM/YYYY HH:MM:SS em YYYYMMDDHH:MM:SS para ordenação cronológica exata."""
+    """Converte carimbo_data_hora em YYYYMMDD + hora para ordenação cronológica exata."""
     return (
         "CASE "
-        "WHEN carimbo_data_hora LIKE '__/__/____%' THEN "
-        "substr(carimbo_data_hora, 7, 4) || substr(carimbo_data_hora, 4, 2) || substr(carimbo_data_hora, 1, 2) || substr(carimbo_data_hora, 11) "
-        "WHEN carimbo_data_hora LIKE '____-__-__%' THEN "
-        "substr(carimbo_data_hora, 1, 4) || substr(carimbo_data_hora, 6, 2) || substr(carimbo_data_hora, 9, 2) || substr(carimbo_data_hora, 11) "
+        "WHEN NORMALIZA_DATA(carimbo_data_hora) != '' THEN "
+        "NORMALIZA_DATA(carimbo_data_hora) || "
+        "CASE WHEN instr(carimbo_data_hora, ' ') > 0 THEN substr(carimbo_data_hora, instr(carimbo_data_hora, ' ')) ELSE '' END "
         "ELSE '' END"
     )
 
@@ -98,7 +92,22 @@ def _parse_valor_data_filtro(texto):
     if len(s) == 4 and s.isdigit():
         return ('ano', s)
     parte = s.split()[0] if s else ''
-    for fmt in ('%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y', '%Y/%m/%d'):
+    if '/' in parte:
+        partes = parte.split('/')
+        if len(partes) == 3 and all(p.isdigit() for p in partes):
+            if len(partes[2]) == 4:
+                try:
+                    dt = datetime.date(int(partes[2]), int(partes[1]), int(partes[0]))
+                    return ('data', dt.strftime('%Y%m%d'))
+                except ValueError:
+                    return None
+            if len(partes[0]) == 4:
+                try:
+                    dt = datetime.date(int(partes[0]), int(partes[1]), int(partes[2]))
+                    return ('data', dt.strftime('%Y%m%d'))
+                except ValueError:
+                    return None
+    for fmt in ('%Y-%m-%d', '%d-%m-%Y', '%Y/%m/%d'):
         try:
             dt = datetime.datetime.strptime(parte, fmt)
             return ('data', dt.strftime('%Y%m%d'))
@@ -108,8 +117,8 @@ def _parse_valor_data_filtro(texto):
 
 
 def _extrair_operador_do_termo(termo, operador_atual):
-    """Permite digitar operadores como '> 1970' ou '>= 01/01/1970' direto na busca."""
-    if operador_atual != 'contem' or not termo:
+    """Extrai/limpa prefixos como '> 1970' ou '< 1950' mesmo se o operador já foi escolhido no dropdown."""
+    if not termo:
         return operador_atual, termo
     prefixos = (
         ('>=', 'maior_igual'),
@@ -122,7 +131,10 @@ def _extrair_operador_do_termo(termo, operador_atual):
         if termo.startswith(pref) and len(termo) > len(pref):
             resto = termo[len(pref):].strip()
             if resto:
-                return op, resto
+                # Se o usuário já escolheu um operador no dropdown, respeita o dropdown e limpa o prefixo duplicado;
+                # se estava em 'contem', adota o operador digitado.
+                op_final = op if operador_atual == 'contem' else operador_atual
+                return op_final, resto
     return operador_atual, termo
 
 
@@ -175,7 +187,14 @@ def _construir_consulta_pacientes(args):
     if termo_original:
         op_efetivo, termo_efetivo = _extrair_operador_do_termo(termo_original, operador_filtro)
 
-        if op_efetivo == 'contem' or coluna_filtro == 'todas':
+        coluna_alvo = coluna_filtro
+        if op_efetivo != 'contem' and coluna_filtro == 'todas':
+            if _parse_valor_data_filtro(termo_efetivo):
+                coluna_alvo = 'dn'
+            elif termo_efetivo.isdigit():
+                coluna_alvo = 'prontuario_num'
+
+        if op_efetivo == 'contem' or coluna_alvo == 'todas':
             like_termo = f"%{termo_efetivo}%"
             apenas_digitos = ''.join(filter(str.isdigit, termo_efetivo))
             like_cpf_digitos = f"%{apenas_digitos}%" if apenas_digitos else like_termo
@@ -189,9 +208,9 @@ def _construir_consulta_pacientes(args):
                 params.append(like_termo)
         else:
             op_sql = _MAPA_OP_SQL[op_efetivo]
-            if coluna_filtro in _COLUNAS_DATA:
+            if coluna_alvo in _COLUNAS_DATA:
                 parsed = _parse_valor_data_filtro(termo_efetivo)
-                expr_data = _sql_expr_data_ordenavel(coluna_filtro)
+                expr_data = _sql_expr_data_ordenavel(coluna_alvo)
                 if parsed:
                     tipo_val, val_norm = parsed
                     if tipo_val == 'ano':
@@ -214,21 +233,21 @@ def _construir_consulta_pacientes(args):
                         query_base += f" AND ({expr_data}) != '' AND ({expr_data}) {op_sql} ?"
                         params.append(val_norm)
                 else:
-                    query_base += f" AND COALESCE({coluna_filtro}, '') COLLATE NOCASE {op_sql} ?"
+                    query_base += f" AND COALESCE({coluna_alvo}, '') COLLATE PT_BR {op_sql} ?"
                     params.append(termo_efetivo)
-            elif coluna_filtro == 'prontuario_num' and termo_efetivo.isdigit():
+            elif coluna_alvo == 'prontuario_num' and termo_efetivo.isdigit():
                 query_base += f" AND prontuario_num GLOB '[0-9]*' AND CAST(prontuario_num AS INTEGER) {op_sql} ?"
                 params.append(int(termo_efetivo))
-            elif coluna_filtro == 'cpf' and op_efetivo == 'igual':
+            elif coluna_alvo == 'cpf' and op_efetivo == 'igual':
                 apenas_digitos = ''.join(filter(str.isdigit, termo_efetivo))
                 if apenas_digitos:
                     query_base += " AND (cpf = ? OR REPLACE(REPLACE(COALESCE(cpf, ''), '.', ''), '-', '') = ?)"
                     params.extend([termo_efetivo, apenas_digitos])
                 else:
-                    query_base += " AND COALESCE(cpf, '') COLLATE NOCASE = ?"
+                    query_base += " AND COALESCE(cpf, '') COLLATE PT_BR = ?"
                     params.append(termo_efetivo)
             else:
-                query_base += f" AND COALESCE({coluna_filtro}, '') COLLATE NOCASE {op_sql} ?"
+                query_base += f" AND COALESCE({coluna_alvo}, '') COLLATE PT_BR {op_sql} ?"
                 params.append(termo_efetivo)
 
     order_by = _construir_clausula_order_by(ordem, direcao)
@@ -442,6 +461,9 @@ def editar(id):
             'cpf': cpf,
         }
         mudancas = _descrever_diferencas(paciente, novos_valores, CAMPOS_PLANILHA)
+        if not mudancas:
+            flash('Nenhuma alteração foi feita.', 'info')
+            return redirect(url_for('pacientes.index'))
 
         try:
             db.execute(
@@ -471,16 +493,10 @@ def editar(id):
             )
             db.commit()
 
-            if mudancas:
-                log_audit(
-                    'EDICAO',
-                    f"Paciente {nome} (Prontuário: {prontuario_num}) alterado:\n" + "\n".join(mudancas),
-                )
-            else:
-                log_audit(
-                    'EDICAO',
-                    f"Paciente {nome} (Prontuário: {prontuario_num}) salvo sem alterações de campo.",
-                )
+            log_audit(
+                'EDICAO',
+                f"Paciente {nome} (Prontuário: {prontuario_num}) alterado:\n" + "\n".join(mudancas),
+            )
 
             flash(f'Cadastro de "{nome}" atualizado com sucesso!', 'success')
             return redirect(url_for('pacientes.index'))
