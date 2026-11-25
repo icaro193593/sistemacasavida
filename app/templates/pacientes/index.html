@@ -6,7 +6,7 @@
 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem;">
     <div>
         <h1 style="font-size: 1.5rem; color: var(--cor-primaria); font-weight: 700;">Lista de Pacientes</h1>
-        <p style="font-size: 0.85rem; color: var(--cor-texto-mutado);">{{ total_registros }} registro(s) encontrado(s)</p>
+        <p style="font-size: calc(0.85rem + 1px); color: var(--cor-texto-mutado);">{{ total_registros }} registro(s) encontrado(s)</p>
     </div>
     <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
         <a href="{{ url_for('pacientes.novo') }}" class="btn btn-primario">

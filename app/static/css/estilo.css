@@ -472,6 +472,12 @@ body {
   margin-bottom: 1rem;
 }
 
+.card-planilha,
+.card:has(.tabela-container) {
+  border-color: #d1d5db;
+  box-shadow: 0 8px 24px -4px rgba(15, 23, 42, 0.12), 0 3px 8px -2px rgba(15, 23, 42, 0.07);
+}
+
 .tabela-planilha-container {
   max-height: calc(100vh - 265px);
   min-height: 320px;
@@ -586,8 +592,9 @@ body {
 
 .tabela th {
   background-color: #f8fafc;
-  color: #475569;
-  font-weight: 600;
+  color: #1e293b;
+  font-size: calc(0.9rem + 1px);
+  font-weight: 750;
   padding: 0.75rem 1rem;
   border-bottom: 2px solid var(--cor-borda);
   white-space: nowrap;
@@ -616,6 +623,11 @@ body {
   padding: 0.55rem 0.7rem;
   font-size: 0.84rem;
   border-right: 1px solid #f1f5f9;
+}
+
+.tabela-planilha th {
+  font-size: calc(0.84rem + 1px);
+  font-weight: 750;
 }
 
 .tabela-planilha th:last-child,
@@ -730,6 +742,11 @@ body {
 
 .tabela-planilha td[data-campo="nome"] {
   min-width: 160px;
+
+}
+
+.tabela-planilha td[data-campo="nome"] strong {
+  font-weight: 630;
 }
 
 .tabela-planilha td[data-campo="endereco"],
