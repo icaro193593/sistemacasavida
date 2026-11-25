@@ -1,9 +1,22 @@
+import io
 import os
+import smtplib
+import sqlite3
+import tempfile
 import unittest
+import zipfile
+from email.message import EmailMessage
 from unittest.mock import patch
 import config
 from app import create_app
-from app.db import get_db
+from app.backup import (
+    contar_registros_backup,
+    executar_backup,
+    limpar_backups_automaticos,
+    listar_backups,
+)
+from app.db import get_db, init_db
+from scripts import backup_semanal
 
 TEST_DB_PATH = os.path.join(config.DATA_DIR, 'test_casa_vida.db')
 
@@ -311,7 +324,7 @@ class TestCasaVida(unittest.TestCase):
 
         r_bkp = self.client.get('/backup/')
         self.assertEqual(r_bkp.status_code, 200)
-        self.assertIn('Backups e Segurança dos Dados', r_bkp.get_data(as_text=True))
+        self.assertIn('Backups do Banco de Dados', r_bkp.get_data(as_text=True))
         print("[PASS] Teste 07: Logs, exportação CSV 13 colunas e backups validados.")
 
     def test_08_ordenacao_filtro_matematico_e_exportacao_sincronizada(self):
@@ -481,6 +494,409 @@ class TestCasaVida(unittest.TestCase):
         self.assertIn('toast-container', html_logs)
 
         print("[PASS] Teste 10: Ordenação PT-BR com acentos, toasts flutuantes, logs unificados e backups limpos validados.")
+
+    def test_11_retencao_automatica_backups(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(self.app.config, {'BACKUPS_DIR': tmpdir, 'BACKUP_AUTO_RETENCAO': 8}):
+                with self.app.app_context():
+                    # Gera 2 backups manuais que devem permanecer intactos
+                    m1, err_m1 = executar_backup(tipo='manual')
+                    m2, err_m2 = executar_backup(tipo='manual')
+                    self.assertIsNone(err_m1)
+                    self.assertIsNone(err_m2)
+
+                    # Gera mais de 8 backups automáticos (10 execuções)
+                    for _ in range(10):
+                        nome_auto, err_auto = executar_backup(tipo='automatico')
+                        self.assertIsNone(err_auto)
+                        self.assertTrue(nome_auto.startswith('casa_vida_backup_auto_'))
+
+                    arquivos = os.listdir(tmpdir)
+                    autos = [f for f in arquivos if f.startswith('casa_vida_backup_auto_') and f.endswith('.db')]
+                    manuais = [
+                        f for f in arquivos
+                        if f.startswith('casa_vida_backup_')
+                        and not f.startswith('casa_vida_backup_auto_')
+                        and f.endswith('.db')
+                    ]
+                    self.assertEqual(len(autos), 8)
+                    self.assertEqual(sorted(manuais), sorted([m1, m2]))
+
+                    # Valida também chamada direta de limpar_backups_automaticos com excesso artificial
+                    extra_1 = os.path.join(tmpdir, 'casa_vida_backup_auto_20000101_000001.db')
+                    extra_2 = os.path.join(tmpdir, 'casa_vida_backup_auto_20000101_000002.db')
+                    for idx, caminho_extra in enumerate((extra_1, extra_2), start=1):
+                        with open(caminho_extra, 'wb') as f:
+                            f.write(b'SQLite format 3\x00' + b'\x00' * 100)
+                        os.utime(caminho_extra, (1000000 + idx, 1000000 + idx))
+
+                    removidos = limpar_backups_automaticos()
+                    self.assertEqual(len(removidos), 2)
+                    self.assertFalse(os.path.exists(extra_1))
+                    self.assertFalse(os.path.exists(extra_2))
+
+                    autos_final = [
+                        f for f in os.listdir(tmpdir)
+                        if f.startswith('casa_vida_backup_auto_') and f.endswith('.db')
+                    ]
+                    self.assertEqual(len(autos_final), 8)
+                    self.assertTrue(os.path.exists(os.path.join(tmpdir, m1)))
+                    self.assertTrue(os.path.exists(os.path.join(tmpdir, m2)))
+
+        print("[PASS] Teste 11: Retenção automática de 8 backups e preservação dos backups manuais validadas.")
+
+    def test_12_pagina_backup_e_envio_email(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_email = {
+                'BACKUPS_DIR': tmpdir,
+                'SMTP_HOST': 'smtp.gmail.com',
+                'SMTP_PORT': 465,
+                'SMTP_USE_SSL': True,
+                'SMTP_USER': 'remetente@teste.org',
+                'SMTP_PASSWORD': 'abcd efgh ijkl mnop',
+                'BACKUP_EMAIL_DESTINO': 'destino@teste.org',
+            }
+            with patch.dict(self.app.config, cfg_email):
+                r_get = self.client.get('/backup/')
+                self.assertEqual(r_get.status_code, 200)
+                html = r_get.get_data(as_text=True)
+                self.assertIn('Registros', html)
+                self.assertIn('Enviar Backup por E-mail', html)
+                self.assertIn('action="/backup/restaurar-arquivo"', html)
+                self.assertIn('accept=".db,.sqlite,.zip"', html)
+
+                # 1) Envio manual com SMTP_SSL mockado
+                with patch('smtplib.SMTP_SSL') as mock_smtp_ssl:
+                    mock_server = mock_smtp_ssl.return_value.__enter__.return_value
+                    r_ok = self.client.post('/backup/enviar-email', follow_redirects=True)
+                    self.assertEqual(r_ok.status_code, 200)
+                    html_ok = r_ok.get_data(as_text=True)
+                    self.assertIn('enviado por e-mail com sucesso!', html_ok)
+
+                    mock_smtp_ssl.assert_called_once()
+                    mock_server.login.assert_called_once_with('remetente@teste.org', 'abcd efgh ijkl mnop')
+                    mock_server.send_message.assert_called_once()
+
+                    msg_enviada = mock_server.send_message.call_args[0][0]
+                    self.assertIsInstance(msg_enviada, EmailMessage)
+                    self.assertEqual(msg_enviada['To'], 'destino@teste.org')
+
+                    anexos = list(msg_enviada.iter_attachments())
+                    self.assertEqual(len(anexos), 1)
+                    nome_anexo = anexos[0].get_filename()
+                    self.assertTrue(nome_anexo.endswith('.zip'))
+
+                    zip_bytes = anexos[0].get_payload(decode=True)
+                    with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zf:
+                        nomes_internos = zf.namelist()
+                        self.assertEqual(len(nomes_internos), 1)
+                        self.assertTrue(nomes_internos[0].endswith('.db'))
+                        db_bytes = zf.read(nomes_internos[0])
+                        self.assertTrue(db_bytes.startswith(b'SQLite format 3\x00'))
+
+                with self.app.app_context():
+                    db = get_db()
+                    log_ok = db.execute(
+                        "SELECT * FROM logs_auditoria WHERE acao = 'BACKUP_EMAIL' ORDER BY id DESC LIMIT 1"
+                    ).fetchone()
+                    self.assertIsNotNone(log_ok)
+                    self.assertIn('destino@teste.org', log_ok['detalhes'])
+                    self.assertIn('enviado por e-mail', log_ok['detalhes'])
+
+                # 2) Falha de autenticação SMTP orientando sobre Senha de App
+                with patch('smtplib.SMTP_SSL') as mock_smtp_err:
+                    mock_server_err = mock_smtp_err.return_value.__enter__.return_value
+                    mock_server_err.login.side_effect = smtplib.SMTPAuthenticationError(
+                        535, b'5.7.8 Username and Password not accepted'
+                    )
+                    r_err = self.client.post('/backup/enviar-email', follow_redirects=True)
+                    self.assertEqual(r_err.status_code, 200)
+                    html_err = r_err.get_data(as_text=True)
+                    self.assertIn('Erro ao enviar backup por e-mail', html_err)
+                    self.assertNotIn('Erro ao enviar backup por e-mail: Erro ao enviar', html_err)
+                    self.assertIn('Senha de App', html_err)
+
+                with self.app.app_context():
+                    db = get_db()
+                    log_err = db.execute(
+                        "SELECT * FROM logs_auditoria WHERE acao = 'BACKUP_EMAIL' ORDER BY id DESC LIMIT 1"
+                    ).fetchone()
+                    self.assertIsNotNone(log_err)
+                    self.assertIn('Falha ao enviar backup por e-mail', log_err['detalhes'])
+                    self.assertIn('Senha de App', log_err['detalhes'])
+
+                # 3) Desconexão abrupta durante server.login (caso real do Gmail com senha comum)
+                with patch('smtplib.SMTP_SSL') as mock_smtp_disc:
+                    mock_server_disc = mock_smtp_disc.return_value.__enter__.return_value
+                    mock_server_disc.login.side_effect = smtplib.SMTPServerDisconnected(
+                        'Connection unexpectedly closed'
+                    )
+                    r_disc = self.client.post('/backup/enviar-email', follow_redirects=True)
+                    self.assertEqual(r_disc.status_code, 200)
+                    html_disc = r_disc.get_data(as_text=True)
+                    self.assertIn('Erro ao enviar backup por e-mail:', html_disc)
+                    self.assertIn('encerrou a conexão durante a autenticação', html_disc)
+                    self.assertIn('Senha de App de 16 letras', html_disc)
+                    self.assertNotIn('Erro ao enviar backup por e-mail: Erro ao enviar', html_disc)
+
+                # 4) Falha SMTP genérica sem prefixo duplicado na mensagem flash
+                with patch('smtplib.SMTP_SSL') as mock_smtp_conn_err:
+                    mock_server_conn_err = mock_smtp_conn_err.return_value.__enter__.return_value
+                    mock_server_conn_err.send_message.side_effect = smtplib.SMTPException(
+                        'Conexão recusada pelo servidor'
+                    )
+                    r_smtp_err = self.client.post('/backup/enviar-email', follow_redirects=True)
+                    self.assertEqual(r_smtp_err.status_code, 200)
+                    html_smtp_err = r_smtp_err.get_data(as_text=True)
+                    self.assertIn('Erro ao enviar backup por e-mail: Conexão recusada pelo servidor', html_smtp_err)
+                    self.assertNotIn('Erro ao enviar backup por e-mail: Erro ao enviar', html_smtp_err)
+
+        print("[PASS] Teste 12: Página /backup/, envio de e-mail com .zip válido, erro sem duplicação e Senha de App validados.")
+
+    def test_13_restauracao_via_upload(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            backups_dir = os.path.join(tmpdir, 'backups')
+            os.makedirs(backups_dir, exist_ok=True)
+            db_alvo = os.path.join(tmpdir, 'alvo_restore.db')
+            db_fonte = os.path.join(tmpdir, 'fonte_valida.db')
+            db_zip_fonte = os.path.join(tmpdir, 'fonte_zip.db')
+
+            def _criar_db_com_paciente(caminho, prontuario, nome):
+                init_db(caminho)
+                conn = sqlite3.connect(caminho)
+                try:
+                    conn.execute(
+                        "INSERT INTO pacientes (prontuario_num, nome) VALUES (?, ?)",
+                        (prontuario, nome),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+
+            _criar_db_com_paciente(db_alvo, '7000', 'Paciente Original Pre-Restore')
+            _criar_db_com_paciente(db_fonte, '8001', 'Paciente Restaurado DB')
+            _criar_db_com_paciente(db_zip_fonte, '8002', 'Paciente Restaurado ZIP')
+
+            with open(db_fonte, 'rb') as f:
+                bytes_db_valido = f.read()
+
+            zip_buf = io.BytesIO()
+            with zipfile.ZipFile(zip_buf, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.write(db_zip_fonte, arcname='casa_vida_backup_zip.db')
+            bytes_zip_valido = zip_buf.getvalue()
+
+            with patch.dict(self.app.config, {'DATABASE': db_alvo, 'BACKUPS_DIR': backups_dir}):
+                # 1) Upload de .db válido restaura registros, cria backup pre_restauracao e grava log
+                r_db = self.client.post(
+                    '/backup/restaurar-arquivo',
+                    data={'arquivo_backup': (io.BytesIO(bytes_db_valido), 'backup_valido.db')},
+                    content_type='multipart/form-data',
+                    follow_redirects=True,
+                )
+                self.assertEqual(r_db.status_code, 200)
+                self.assertIn('restaurado com sucesso', r_db.get_data(as_text=True))
+
+                with self.app.app_context():
+                    db = get_db()
+                    nomes = [r['nome'] for r in db.execute("SELECT nome FROM pacientes").fetchall()]
+                    self.assertEqual(nomes, ['Paciente Restaurado DB'])
+                    log_rest = db.execute(
+                        "SELECT * FROM logs_auditoria WHERE acao = 'RESTAURACAO' ORDER BY id DESC LIMIT 1"
+                    ).fetchone()
+                    self.assertIsNotNone(log_rest)
+                    self.assertIn('backup_valido.db', log_rest['detalhes'])
+
+                pre_backups = [
+                    f for f in os.listdir(backups_dir)
+                    if f.startswith('casa_vida_backup_') and f.endswith('.db')
+                ]
+                self.assertEqual(len(pre_backups), 1)
+                conn_pre = sqlite3.connect(os.path.join(backups_dir, pre_backups[0]))
+                try:
+                    nomes_pre = [r[0] for r in conn_pre.execute("SELECT nome FROM pacientes").fetchall()]
+                finally:
+                    conn_pre.close()
+                self.assertEqual(nomes_pre, ['Paciente Original Pre-Restore'])
+
+                # 2) Upload de .zip válido restaura os registros esperados
+                r_zip = self.client.post(
+                    '/backup/restaurar-arquivo',
+                    data={'arquivo_backup': (io.BytesIO(bytes_zip_valido), 'backup_email.zip')},
+                    content_type='multipart/form-data',
+                    follow_redirects=True,
+                )
+                self.assertEqual(r_zip.status_code, 200)
+                self.assertIn('restaurado com sucesso', r_zip.get_data(as_text=True))
+
+                with self.app.app_context():
+                    db = get_db()
+                    nomes = [r['nome'] for r in db.execute("SELECT nome FROM pacientes").fetchall()]
+                    self.assertEqual(nomes, ['Paciente Restaurado ZIP'])
+
+                # 3) Rejeições seguras (sem corromper o banco atual)
+                zip_sem_db_buf = io.BytesIO()
+                with zipfile.ZipFile(zip_sem_db_buf, 'w') as zf:
+                    zf.writestr('readme.txt', 'apenas texto')
+
+                zip_slip_buf = io.BytesIO()
+                with zipfile.ZipFile(zip_slip_buf, 'w') as zf:
+                    zf.writestr('../evil.db', bytes_db_valido)
+
+                casos_invalidos = [
+                    (b'conteudo texto corrompido' * 10, 'corrompido.db'),
+                    (b'qualquer texto', 'invalido.txt'),
+                    (zip_sem_db_buf.getvalue(), 'sem_banco.zip'),
+                    (zip_slip_buf.getvalue(), 'zip_slip.zip'),
+                ]
+                for payload, nome_arq in casos_invalidos:
+                    r_inv = self.client.post(
+                        '/backup/restaurar-arquivo',
+                        data={'arquivo_backup': (io.BytesIO(payload), nome_arq)},
+                        content_type='multipart/form-data',
+                        follow_redirects=True,
+                    )
+                    self.assertEqual(r_inv.status_code, 200)
+                    self.assertIn('Erro ao restaurar banco', r_inv.get_data(as_text=True))
+
+                    with self.app.app_context():
+                        db = get_db()
+                        nomes = [r['nome'] for r in db.execute("SELECT nome FROM pacientes").fetchall()]
+                        self.assertEqual(nomes, ['Paciente Restaurado ZIP'])
+
+                self.assertFalse(os.path.exists(os.path.join(tmpdir, 'evil.db')))
+
+        print("[PASS] Teste 13: Restauração via upload (.db e .zip), pre_restauracao e rejeições seguras validados.")
+
+    def test_14_script_backup_semanal(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = os.path.join(tmpdir, 'data')
+            backups_dir = os.path.join(tmpdir, 'backups')
+            os.makedirs(data_dir, exist_ok=True)
+            os.makedirs(backups_dir, exist_ok=True)
+            db_semanal = os.path.join(data_dir, 'semanal_test.db')
+
+            app_semanal = create_app({
+                'TESTING': True,
+                'DATABASE': db_semanal,
+                'BACKUPS_DIR': backups_dir,
+                'BACKUP_AUTO_RETENCAO': 8,
+                'SMTP_HOST': 'smtp.gmail.com',
+                'SMTP_PORT': 465,
+                'SMTP_USE_SSL': True,
+                'SMTP_USER': 'semanal@teste.org',
+                'SMTP_PASSWORD': 'senha-app-mock',
+                'BACKUP_EMAIL_DESTINO': 'destino@teste.org',
+            })
+
+            with patch.object(backup_semanal.config, 'DATA_DIR', data_dir), \
+                 patch('app.create_app', return_value=app_semanal):
+                # 1) Execução com --sem-email
+                with patch('smtplib.SMTP_SSL') as mock_smtp_sem_email:
+                    rc_sem_email = backup_semanal.main(['--sem-email'])
+                    self.assertEqual(rc_sem_email, 0)
+                    mock_smtp_sem_email.assert_not_called()
+
+                autos = [
+                    f for f in os.listdir(backups_dir)
+                    if f.startswith('casa_vida_backup_auto_') and f.endswith('.db')
+                ]
+                self.assertEqual(len(autos), 1)
+                self.assertTrue(os.path.exists(os.path.join(data_dir, 'backup_semanal.log')))
+
+                # 2) Execução completa com SMTP_SSL mockado
+                with patch('smtplib.SMTP_SSL') as mock_smtp_ok:
+                    mock_server = mock_smtp_ok.return_value.__enter__.return_value
+                    rc_email = backup_semanal.main([])
+                    self.assertEqual(rc_email, 0)
+                    mock_smtp_ok.assert_called_once()
+                    mock_server.send_message.assert_called_once()
+
+                autos_depois = [
+                    f for f in os.listdir(backups_dir)
+                    if f.startswith('casa_vida_backup_auto_') and f.endswith('.db')
+                ]
+                self.assertEqual(len(autos_depois), 2)
+
+                with app_semanal.app_context():
+                    db = get_db()
+                    acoes = [
+                        r['acao']
+                        for r in db.execute("SELECT acao FROM logs_auditoria ORDER BY id ASC").fetchall()
+                    ]
+                    self.assertIn('BACKUP', acoes)
+                    self.assertIn('BACKUP_EMAIL', acoes)
+
+        print("[PASS] Teste 14: Script scripts/backup_semanal.py (--sem-email e SMTP mockado) validado.")
+
+    def test_15_listar_backups_contagem_registros(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            def _criar_backup_com_pacientes(nome_arquivo, qtd):
+                caminho = os.path.join(tmpdir, nome_arquivo)
+                init_db(caminho)
+                conn = sqlite3.connect(caminho)
+                try:
+                    for i in range(qtd):
+                        conn.execute(
+                            "INSERT INTO pacientes (prontuario_num, nome) VALUES (?, ?)",
+                            (f'9{qtd}{i}', f'Paciente {nome_arquivo} #{i}'),
+                        )
+                    conn.commit()
+                finally:
+                    conn.close()
+                return caminho
+
+            bkp_17 = _criar_backup_com_pacientes('backup_17_pacientes.db', 17)
+            bkp_3 = _criar_backup_com_pacientes('backup_3_pacientes.db', 3)
+            bkp_0 = _criar_backup_com_pacientes('backup_0_pacientes.db', 0)
+
+            bkp_sem_tabela = os.path.join(tmpdir, 'backup_sem_tabela.db')
+            conn_sem = sqlite3.connect(bkp_sem_tabela)
+            try:
+                conn_sem.execute("CREATE TABLE outra_tabela (id INTEGER PRIMARY KEY)")
+                conn_sem.commit()
+            finally:
+                conn_sem.close()
+
+            bkp_corrompido = os.path.join(tmpdir, 'backup_corrompido.db')
+            with open(bkp_corrompido, 'wb') as f:
+                f.write(b'conteudo-invalido-nao-sqlite' * 5)
+
+            self.assertEqual(contar_registros_backup(bkp_17), 17)
+            self.assertEqual(contar_registros_backup(bkp_3), 3)
+            self.assertEqual(contar_registros_backup(bkp_0), 0)
+            self.assertIsNone(contar_registros_backup(bkp_sem_tabela))
+            self.assertIsNone(contar_registros_backup(bkp_corrompido))
+            self.assertIsNone(contar_registros_backup(os.path.join(tmpdir, 'inexistente.db')))
+
+            with patch.dict(self.app.config, {'BACKUPS_DIR': tmpdir}):
+                with self.app.app_context():
+                    itens = listar_backups()
+
+                por_nome = {item['nome']: item for item in itens}
+                self.assertEqual(por_nome['backup_17_pacientes.db']['registros'], 17)
+                self.assertEqual(por_nome['backup_3_pacientes.db']['registros'], 3)
+                self.assertEqual(por_nome['backup_0_pacientes.db']['registros'], 0)
+                self.assertIsNone(por_nome['backup_sem_tabela.db']['registros'])
+                self.assertIsNone(por_nome['backup_corrompido.db']['registros'])
+
+                r_bkp = self.client.get('/backup/')
+                self.assertEqual(r_bkp.status_code, 200)
+                html = r_bkp.get_data(as_text=True)
+                self.assertIn('Registros', html)
+
+                tbody = html[html.find('<tbody>'):html.find('</tbody>')]
+                for nome_arq, esperado in (
+                    ('backup_17_pacientes.db', '17'),
+                    ('backup_3_pacientes.db', '3'),
+                    ('backup_0_pacientes.db', '0'),
+                ):
+                    idx_nome = tbody.find(nome_arq)
+                    self.assertNotEqual(idx_nome, -1)
+                    idx_fim_tr = tbody.find('</tr>', idx_nome)
+                    linha_html = tbody[idx_nome:idx_fim_tr]
+                    self.assertIn(esperado, linha_html)
+
+        print("[PASS] Teste 15: listar_backups() e GET /backup/ com contagem de registros e tolerância a inválidos validados.")
 
 
 if __name__ == '__main__':

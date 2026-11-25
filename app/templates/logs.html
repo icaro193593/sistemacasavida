@@ -27,6 +27,7 @@
         <option value="IMPORTACAO" {% if acao_filtro == 'IMPORTACAO' %}selected{% endif %}>{{ acoes_labels.get('IMPORTACAO', 'IMPORTACAO') }}</option>
         <option value="EXPORTACAO" {% if acao_filtro == 'EXPORTACAO' %}selected{% endif %}>{{ acoes_labels.get('EXPORTACAO', 'EXPORTACAO') }}</option>
         <option value="BACKUP" {% if acao_filtro == 'BACKUP' %}selected{% endif %}>{{ acoes_labels.get('BACKUP', 'BACKUP') }}</option>
+        <option value="BACKUP_EMAIL" {% if acao_filtro == 'BACKUP_EMAIL' %}selected{% endif %}>{{ acoes_labels.get('BACKUP_EMAIL', 'BACKUP_EMAIL') }}</option>
         <option value="RESTAURACAO" {% if acao_filtro == 'RESTAURACAO' %}selected{% endif %}>{{ acoes_labels.get('RESTAURACAO', 'RESTAURACAO') }}</option>
     </select>
 

@@ -13,6 +13,7 @@ ACOES_LABELS = {
     'EXPORTACAO': 'Exportação CSV',
     'ATENDIMENTO': 'Atendimento',
     'BACKUP': 'Backup',
+    'BACKUP_EMAIL': 'Backup por E-mail',
     'DOWNLOAD_BACKUP': 'Download Backup',
     'RESTAURACAO': 'Restauração Backup',
 }

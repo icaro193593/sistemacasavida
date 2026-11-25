@@ -1419,3 +1419,58 @@ textarea.form-controle {
 .badge-log-restauracao {
   color: #9a3412;
 }
+
+.badge-log-backup_email {
+  color: #0f766e;
+}
+
+.card-restaurar-compacto {
+  padding: 0.75rem 1.15rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.restaurar-titulo {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  color: var(--cor-texto);
+  white-space: nowrap;
+}
+
+.restaurar-dica {
+  font-size: 0.8rem;
+  color: var(--cor-texto-mutado);
+}
+
+.form-restaurar-compacto {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  justify-content: flex-end;
+  min-width: 260px;
+  flex-wrap: wrap;
+}
+
+.input-arquivo-compacto {
+  flex: 1;
+  max-width: 360px;
+  min-width: 200px;
+  padding: 0.32rem 0.55rem;
+  border: 1px solid var(--cor-borda);
+  border-radius: var(--raio);
+  background-color: #fafbfc;
+  font-size: 0.84rem;
+  color: var(--cor-texto);
+}
+
+.btn-icone-backup {
+  padding: 0.43rem 0.5rem;
+  vertical-align: middle;
+}

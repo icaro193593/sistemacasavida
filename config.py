@@ -63,7 +63,7 @@ else:
 class Config:
     SECRET_KEY = SECRET_KEY
     DATABASE = DATABASE_PATH
-    MAX_CONTENT_LENGTH = 16 * 1024 * 1024
+    MAX_CONTENT_LENGTH = 32 * 1024 * 1024
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = 'Lax'
     APP_NAME = 'Sistema Casa Vida'
@@ -77,3 +77,13 @@ class Config:
     GOOGLE_SHEETS_GID = os.environ.get('GOOGLE_SHEETS_GID', '0').strip() or '0'
     GOOGLE_SHEETS_TIMEOUT = int(os.environ.get('GOOGLE_SHEETS_TIMEOUT', '15') or 15)
     GOOGLE_SHEETS_MIN_DATE = os.environ.get('GOOGLE_SHEETS_MIN_DATE', '2026-11-23').strip()
+
+    # Backup automático semanal e envio por e-mail (SMTP nativo)
+    SMTP_HOST = os.environ.get('SMTP_HOST', 'smtp.gmail.com').strip() or 'smtp.gmail.com'
+    SMTP_PORT = int(os.environ.get('SMTP_PORT', '465') or 465)
+    SMTP_USE_SSL = os.environ.get('SMTP_USE_SSL', 'true').strip().lower() in ('1', 'true', 'yes', 'sim', 'on')
+    SMTP_USER = os.environ.get('SMTP_USER', '').strip()
+    SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '').strip()
+    SMTP_TIMEOUT = int(os.environ.get('SMTP_TIMEOUT', '30') or 30)
+    BACKUP_EMAIL_DESTINO = os.environ.get('BACKUP_EMAIL_DESTINO', '').strip()
+    BACKUP_AUTO_RETENCAO = int(os.environ.get('BACKUP_AUTO_RETENCAO', '8') or 8)
