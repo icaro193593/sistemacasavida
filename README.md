@@ -60,6 +60,7 @@ sistemacasavida/
 │   └── static/            # CSS, JS e imagens (incluindo img/casa_vida.ico)
 ├── scripts/
 │   ├── backup_semanal.py            # rotina de backup automático semanal com envio por e-mail e retenção
+│   ├── instalar_sistema.ps1         # instala Python, venv, dependências, backup semanal e atalho
 │   ├── instalar_tarefa_backup.ps1   # registra a tarefa semanal no Agendador de Tarefas do Windows
 │   └── desinstalar_tarefa_backup.ps1 # remove a tarefa agendada de backup
 ├── data/                  # banco SQLite, chave secreta e log do backup semanal (não vão para o Git)
@@ -69,12 +70,21 @@ sistemacasavida/
 ├── config.py              # configurações e caminhos da aplicação
 ├── run.py                 # inicia o servidor (Waitress) e abre o navegador
 ├── iniciar.bat            # atalho para abrir o sistema no Windows (minimizado na barra de tarefas)
+├── instalar.bat           # instalador automático de primeira execução no Windows
 ├── test_app.py            # testes automatizados
 ├── requirements.txt       # dependências
 └── README.md
 ```
 
 ## Instalação
+
+### Instalação rápida no Windows (recomendada)
+
+1. Baixe e extraia o `.zip` do repositório (ou clone) na pasta definitiva (ex.: `C:\SistemaCasaVida`).
+2. Coloque o arquivo `.env` preenchido na raiz da pasta *(ou preencha o `.env` gerado automaticamente após a instalação)*.
+3. Dê **duplo clique em `instalar.bat`**: ele detecta/instala o Python 3 automaticamente (sem precisar de Administrador), cria o `venv`, instala o `requirements.txt`, registra o backup semanal no Agendador de Tarefas do Windows, cria o atalho **Sistema Casa Vida** na Área de Trabalho (minimizado e com o ícone `casa_vida.ico`) e já inicia o sistema no navegador.
+
+### Instalação manual (desenvolvimento)
 
 ```bash
 # 1. Clonar o repositório
