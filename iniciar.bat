@@ -1,4 +1,8 @@
 @echo off
+if /i not "%~1"=="--minimized" if /i not "%~1"=="--no-min" (
+    start "Sistema Casa Vida" /min cmd /c ""%~f0" --minimized"
+    exit /b
+)
 title Sistema Casa Vida
 cd /d "%~dp0"
 

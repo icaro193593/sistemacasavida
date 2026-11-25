@@ -125,7 +125,7 @@ Caso o navegador não abra automaticamente, acesse `http://127.0.0.1:5000`.
 
 ### Atalho com duplo clique
 
-O arquivo `iniciar.bat` usa o Python do ambiente virtual `venv` (se existir) para executar `run.py`, que inicia o servidor e abre o sistema no navegador padrão:
+O arquivo `iniciar.bat` **minimiza a janela do CMD automaticamente** para a barra de tarefas, usa o Python do ambiente virtual `venv` (se existir) para executar `run.py`, mantém o servidor local ativo enquanto o sistema estiver em uso e abre o sistema no navegador padrão:
 
 ```bat
 @echo off
@@ -139,9 +139,9 @@ if exist "venv\Scripts\python.exe" (
 )
 ```
 
-*(O script também exibe mensagens de status no terminal e pausa caso ocorra algum erro na inicialização.)*
+*(O script também exibe mensagens de status no terminal e, caso ocorra algum erro na inicialização, pausa para exibir o problema.)*
 
-Crie um atalho para esse arquivo na área de trabalho.
+Crie um atalho para esse arquivo na área de trabalho. Para encerrar o sistema, basta abrir a janela minimizada na barra de tarefas e fechá-la (ou pressionar `Ctrl+C`).
 
 ## Configuração
 
