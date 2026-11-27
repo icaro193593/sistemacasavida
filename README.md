@@ -262,7 +262,7 @@ python test_app.py
 
 Projeto Casa Vida, desenvolvido por estudantes de Sistemas de Informação, Engenharia de Software, Marketing e Administração:
 
-Arthur José Barbosa Medeiros, Bernardo Vizeu de Miranda, Ícaro de Alencar Araripe Andrade, Luiz Gouvêa, Enzo Dutra, João Vitor Faião, Gustavo Gavioli, Samuel Guimarães, Davi Grossi, Matheus Steiner Miletto e Pedro Lucas Ventura Meyer Goulart
+Arthur José Barbosa Medeiros, Bernardo Vizeu de Miranda, Ícaro de Alencar Araripe Andrade, Luiz Gouvêa, Davi Grossi, Matheus Steiner Miletto e Pedro Lucas Ventura Meyer Goulart
 
 ## Licença
 
